@@ -1,0 +1,14 @@
+[package]
+name = "dictation-groq"
+description = "Implementação do AsrEngine para o Groq (endpoint OpenAI-compatible /audio/transcriptions)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dictation-core = { path = "../dictation-core" }
+serde_json = "1"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+ureq = { version = "2", features = ["json"] }
