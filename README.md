@@ -55,12 +55,26 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
+## Running (Linux/X11, headless)
+
+```bash
+# 1) chave do Groq no cofre 0600
+printf 'GROQ_API_KEY=%s\n' "$YOUR_KEY" > ~/.config/anubis/groq.env && chmod 600 ~/.config/anubis/groq.env
+# 2) config (ver config.example.toml)
+mkdir -p ~/.config/dictation-rs && cp config.example.toml ~/.config/dictation-rs/config.toml
+# 3) subir o daemon e usar o cliente
+cargo run -p dictation-daemon --bin dictationd &
+cargo run -p dictation-cli -- toggle      # inicia/para; ao parar, digita no app em foco
+```
+
 ## Roadmap
 
-- [x] `dictation-core` (state machine, sessions, segmentation, ASR contract, config, corrections)
-- [ ] `dictation-groq`
-- [ ] `dictation-platform` (X11: cpal audio, XTest inject, XGrabKey hotkey, click-through overlay, tray)
-- [ ] `dictation-daemon` + `dictation-cli`
+- [x] `dictation-core` (state machine, sessions, append-only segmentation, ASR contract, config, corrections)
+- [x] `dictation-groq` (multipart + mock HTTP tests)
+- [x] `dictation-platform` (cpal audio, X11 inject via xdotool, traits for overlay/tray/hotkey)
+- [x] `dictation-daemon` + `dictation-cli` (socket, end-to-end validated)
+- [ ] GUI: floating REC/preview overlay + tray (egui/winit + tray-icon)
+- [ ] Global hotkeys for the Rust binary (F8/F9)
 - [ ] Wayland backend (feature-gated, later — on a Wayland machine)
 - [ ] Windows backend (feature-gated, later — on a Windows machine)
 

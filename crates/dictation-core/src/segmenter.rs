@@ -63,6 +63,12 @@ impl Segmenter {
         self.total
     }
 
+    /// Samples ainda não emitidos num segmento (a "cauda" em formação).
+    /// Usado pela prévia ao vivo (transcreve só a cauda, sem reenviar o acumulado).
+    pub fn buffered(&self) -> &[i16] {
+        &self.buf
+    }
+
     /// Recebe samples e devolve os segmentos que ficaram completos.
     pub fn push(&mut self, samples: &[i16]) -> Vec<Segment> {
         self.buf.extend_from_slice(samples);

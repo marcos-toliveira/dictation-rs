@@ -1,0 +1,13 @@
+[package]
+name = "dictation-ui"
+description = "Overlay REC + prévia ao vivo + bandeja do dictation-rs (egui/eframe; bandeja via ksni)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dictation-core = { path = "../dictation-core" }
+egui = "0.36"
+eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+tracing = { workspace = true }

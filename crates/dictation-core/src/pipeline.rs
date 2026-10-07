@@ -47,6 +47,16 @@ impl Session {
     pub fn pushed_samples(&self) -> u64 {
         self.segmenter.pushed()
     }
+
+    /// Texto comprometido (segmentos já transcritos).
+    pub fn committed(&self) -> String {
+        self.transcript.text()
+    }
+
+    /// Cauda de áudio em formação (ainda não transcrita).
+    pub fn pending_pcm(&self) -> &[i16] {
+        self.segmenter.buffered()
+    }
 }
 
 /// Orquestrador do ciclo de ditado.
@@ -75,6 +85,22 @@ impl Pipeline {
 
     pub fn is_recording(&self) -> bool {
         self.machine.is_recording()
+    }
+
+    /// Texto já comprometido (segmentos transcritos, append-only).
+    pub fn committed_text(&self) -> String {
+        self.session
+            .as_ref()
+            .map(|s| s.committed())
+            .unwrap_or_default()
+    }
+
+    /// Cauda de áudio ainda não transcrita (para a prévia ao vivo).
+    pub fn pending_pcm(&self) -> Vec<i16> {
+        self.session
+            .as_ref()
+            .map(|s| s.pending_pcm().to_vec())
+            .unwrap_or_default()
     }
 
     /// Inicia uma sessão. Falha se já houver gravação em andamento.
@@ -210,5 +236,21 @@ mod tests {
         p.start().unwrap();
         p.stop().unwrap();
         assert!(p.finish().unwrap().is_none());
+    }
+
+    #[test]
+    fn preview_exposes_committed_and_pending() {
+        let mut p = Pipeline::new(cfg());
+        let id = p.start().unwrap();
+        p.accept(id, "comprometido");
+        let segs = p.push_audio(&[0i16; 7]); // < 10 => fica na cauda
+        assert!(segs.is_empty());
+        assert_eq!(p.committed_text(), "comprometido");
+        assert_eq!(p.pending_pcm().len(), 7);
+
+        p.stop().unwrap();
+        p.finish().unwrap();
+        assert_eq!(p.committed_text(), "");
+        assert!(p.pending_pcm().is_empty());
     }
 }
