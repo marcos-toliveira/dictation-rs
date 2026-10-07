@@ -55,7 +55,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-## Running (Linux/X11, headless)
+## Running (Linux/X11)
 
 ```bash
 # 1) chave do Groq no cofre 0600
@@ -67,17 +67,47 @@ cargo run -p dictation-daemon --bin dictationd &
 cargo run -p dictation-cli -- toggle      # inicia/para; ao parar, digita no app em foco
 ```
 
+## Running (Windows Nativo)
+
+### Instalação rápida via PowerShell:
+
+```powershell
+.\install.ps1
+```
+
+O script compila os binários em modo release, instala-os em `%LOCALAPPDATA%\dictation\bin` (adicionando ao `PATH`), e gera os modelos de configuração em `%APPDATA%\dictation\config.ini` e `%APPDATA%\anubis\groq.env`.
+
+### Configuração da chave Groq:
+Defina a variável de ambiente `GROQ_API_KEY` ou insira a chave no cofre `%APPDATA%\anubis\groq.env` (ou `%USERPROFILE%\.config\anubis\groq.env`).
+
+### Execução:
+1. Inicie o daemon:
+   ```powershell
+   dictationd
+   ```
+2. **Atalhos Globais (automáticos no daemon via `RegisterHotKey`):**
+   - **`F8`**: Gravar / Parar (Push-to-talk ou Toggle). Ao parar, transcreve com Groq e digita diretamente na janela em foco via `SendInput` (com suporte integral a Unicode e acentuação).
+   - **`F9`**: Ensinar correção (`teach`). Captura o texto selecionado e abre diálogo para registrar substituição permanente.
+3. **Controle via CLI ou Bandeja:**
+   - Ícone nativo na bandeja do sistema (`System Tray`) com menu de contexto e indicador de status.
+   - CLI via Named Pipe (`\\.\pipe\dictation`):
+     ```powershell
+     dictation toggle    # Iniciar/parar gravação
+     dictation status    # Consultar estado atual
+     dictation quit      # Encerrar daemon
+     ```
+
 ## Roadmap
 
 - [x] `dictation-core` (state machine, sessions, append-only segmentation, ASR contract, config, corrections)
 - [x] `dictation-groq` (multipart + mock HTTP tests)
 - [x] `dictation-platform` (cpal audio, X11 inject via xdotool, traits for overlay/tray/hotkey)
-- [x] `dictation-daemon` + `dictation-cli` (socket, end-to-end validated)
-- [x] GUI: floating REC/preview overlay + tray (egui/eframe + ksni)
-- [x] Global hotkeys (F8/F9) via KGlobalAccel (`set-shortcut.sh`)
-- [x] `teach` (dialog via zenity/kdialog + CLI) and local whisper.cpp fallback
+- [x] `dictation-daemon` + `dictation-cli` (socket / named pipe, end-to-end validated)
+- [x] GUI: floating REC/preview overlay + tray (egui/eframe + ksni no Linux; Win32 Shell_NotifyIcon no Windows)
+- [x] Global hotkeys (F8/F9) via KGlobalAccel no Linux e `RegisterHotKey` no Windows
+- [x] `teach` (dialog via zenity/kdialog no Linux e InputBox no Windows + CLI) e local whisper.cpp fallback
+- [x] Windows backend nativo (`feat/windows`: cpal WASAPI, SendInput Unicode / arboard clipboard, Named Pipes, RegisterHotKey, overlay sem roubo de foco)
 - [ ] Wayland backend (feature-gated, later — on a Wayland machine)
-- [ ] Windows backend (feature-gated, later — on a Windows machine)
 
 ## License
 

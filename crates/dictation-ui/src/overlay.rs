@@ -7,8 +7,12 @@
 //! a cada atualização da prévia, então o badge REC não "pula" (a borda superior
 //! fica estável, já que a âncora é na base).
 
+use crate::anchor;
 use crate::state::SharedUi;
-use crate::{anchor, x11};
+#[cfg(windows)]
+use crate::win_window as window_helper;
+#[cfg(target_os = "linux")]
+use crate::x11 as window_helper;
 use eframe::egui;
 use std::time::Duration;
 
@@ -27,6 +31,8 @@ pub struct OverlayApp {
     last_reposition: f64,
     last_size: (f32, f32),
     last_win: Option<anchor::Rect>,
+    #[cfg(windows)]
+    style_applied: bool,
 }
 
 impl OverlayApp {
@@ -39,6 +45,8 @@ impl OverlayApp {
             last_reposition: -1.0,
             last_size: (0.0, 0.0),
             last_win: None,
+            #[cfg(windows)]
+            style_applied: false,
         }
     }
 }
@@ -134,16 +142,21 @@ impl eframe::App for OverlayApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
         }
 
+        #[cfg(windows)]
+        if !self.style_applied {
+            self.style_applied = window_helper::ensure_overlay_window_style("dictation-rec");
+        }
+
         // Reancora periodicamente (sem depender do tamanho do conteúdo).
         let t = ctx.input(|i| i.time);
         if t - self.last_reposition > 0.7 {
             self.last_reposition = t;
-            if let Some(win) = x11::active_window_rect() {
+            if let Some(win) = window_helper::active_window_rect() {
                 self.last_win = Some(win);
             }
             if let Some(win) = self.last_win {
                 let (cx, cy) = win.center();
-                let monitor = x11::monitor_rect_for(cx, cy);
+                let monitor = window_helper::monitor_rect_for(cx, cy);
                 let anchor = if has_text {
                     &self.preview_anchor
                 } else {
