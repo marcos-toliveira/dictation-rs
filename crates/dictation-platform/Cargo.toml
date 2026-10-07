@@ -1,0 +1,20 @@
+[package]
+name = "dictation-platform"
+description = "Traits e implementações de plataforma: captura de áudio (cpal), injeção de texto (X11/xdotool), overlay e bandeja."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["audio-cpal", "x11"]
+# captura de áudio portável (Linux ALSA/PulseAudio + Windows WASAPI)
+audio-cpal = ["dep:cpal"]
+# injeção/atalhos no X11 (via xdotool; XTest nativo vem depois)
+x11 = []
+
+[dependencies]
+dictation-core = { path = "../dictation-core" }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+cpal = { version = "0.16", optional = true }

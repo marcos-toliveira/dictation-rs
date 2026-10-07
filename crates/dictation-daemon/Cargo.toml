@@ -1,0 +1,19 @@
+[package]
+name = "dictation-daemon"
+description = "Daemon do dictation-rs: liga captura, ASR (Groq), correções e injeção num socket local."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dictation-core = { path = "../dictation-core" }
+dictation-groq = { path = "../dictation-groq" }
+dictation-platform = { path = "../dictation-platform" }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+dictation-core = { path = "../dictation-core" }
+dictation-platform = { path = "../dictation-platform" }
