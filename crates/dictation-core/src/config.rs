@@ -298,15 +298,29 @@ fn default_socket() -> PathBuf {
     }
 }
 
-/// Expande um `~` inicial para `$HOME` (ou `$USERPROFILE` no Windows).
+/// Expande um `~` inicial para `$HOME` (ou `$USERPROFILE` no Windows),
+/// bem como variáveis de ambiente no formato `%VAR%` (Windows).
 fn expand(p: &str) -> PathBuf {
-    if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {
+    let mut s = p.to_string();
+    while let Some(start) = s.find('%') {
+        if let Some(len) = s[start + 1..].find('%') {
+            let var_name = &s[start + 1..start + 1 + len];
+            if let Ok(val) = std::env::var(var_name) {
+                s = format!("{}{}{}", &s[..start], val, &s[start + 1 + len + 1..]);
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    if let Some(rest) = s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")) {
         let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
         if let Some(home) = home {
             return PathBuf::from(home).join(rest);
         }
     }
-    PathBuf::from(p)
+    PathBuf::from(s)
 }
 
 #[cfg(test)]
@@ -385,6 +399,39 @@ threads = 4
             .to_string_lossy()
             .replace('\\', "/")
             .ends_with(".local/state/dictation"));
+    }
+
+    #[test]
+    fn parses_windows_install_ini() {
+        let ini = "\
+[dictation]
+provider = groq
+language = pt
+model = whisper-large-v3
+device =
+capture = cpal
+max_seconds = 600
+inject = type
+indicator = true
+indicator_anchor = bottom-right
+preview = false
+
+[paths]
+vault = %APPDATA%\\anubis\\groq.env
+vocab = %APPDATA%\\dictation\\vocab.txt
+corrections = %APPDATA%\\dictation\\corrections.tsv
+state_dir = %LOCALAPPDATA%\\dictation
+";
+        let c = Config::parse_ini(ini).unwrap();
+        assert_eq!(c.provider, Provider::Groq);
+        assert_eq!(c.inject, InjectMode::Type);
+        assert_eq!(c.capture, "cpal");
+        assert_eq!(c.language, "pt");
+        assert_eq!(c.model, "whisper-large-v3");
+        assert_eq!(c.max_seconds, 600);
+        assert_eq!(c.device, None);
+        assert_eq!(c.indicator_anchor, "bottom-right");
+        assert!(!c.preview);
     }
 
     #[test]
