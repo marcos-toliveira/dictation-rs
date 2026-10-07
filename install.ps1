@@ -2,7 +2,8 @@
 [CmdletBinding()]
 param(
     [string]$InstallDir = "$env:LOCALAPPDATA\dictation\bin",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$NoStartup
 )
 
 $ErrorActionPreference = "Stop"
@@ -95,11 +96,30 @@ GROQ_API_KEY=gsk_sua_chave_aqui
     Write-Host "    [OK] Criado $vaultFile (adicione sua chave Groq aqui ou na variável de ambiente GROQ_API_KEY)" -ForegroundColor Green
 }
 
+# 6. Configurar inicialização automática com o Windows (Startup)
+if (-not $NoStartup) {
+    $startupFolder = [Environment]::GetFolderPath("Startup")
+    if (-not $startupFolder -or -not (Test-Path $startupFolder)) {
+        $startupFolder = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup"
+    }
+    if (Test-Path $startupFolder) {
+        $shortcutPath = Join-Path $startupFolder "dictationd.lnk"
+        Write-Host "==> Configurando inicialização automática com o Windows em $shortcutPath..." -ForegroundColor Yellow
+        $wsh = New-Object -ComObject WScript.Shell
+        $shortcut = $wsh.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = (Join-Path $InstallDir "dictationd.exe")
+        $shortcut.WorkingDirectory = $InstallDir
+        $shortcut.Description = "Dictation daemon (push-to-talk voice typing)"
+        $shortcut.Save()
+        Write-Host "    [OK] Atalho de inicialização automática criado em: $shortcutPath" -ForegroundColor Green
+    }
+}
+
 Write-Host ""
 Write-Host "=== dictation-rs instalado com sucesso! ===" -ForegroundColor Green
 Write-Host "Como usar:"
-Write-Host "  1. Configure sua chave Groq em '$vaultFile' ou defina a variável de ambiente GROQ_API_KEY."
-Write-Host "  2. Inicie o daemon em segundo plano executando: dictationd"
+Write-Host "  1. A chave Groq está configurada no cofre '$vaultFile' ou via GROQ_API_KEY."
+Write-Host "  2. O daemon (dictationd) iniciará automaticamente com o Windows (ou execute 'dictationd' agora)."
 Write-Host "     - O daemon registra os atalhos globais F8 (Gravar/Parar) e F9 (Ensinar correção)."
 Write-Host "     - Exibe ícone na bandeja do sistema (System Tray) e overlay REC flutuante."
 Write-Host "  3. Ou use o cliente CLI: dictation toggle | dictation status | dictation quit"
