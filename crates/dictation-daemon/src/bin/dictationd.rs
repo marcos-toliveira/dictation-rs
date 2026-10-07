@@ -10,6 +10,8 @@ use dictation_core::{AsrEngine, AsrOptions, Config, InjectMode, Provider};
 use dictation_daemon::{read_last, save_last, teach, Engine, FallbackAsr, LocalWhisper};
 use dictation_groq::GroqEngine;
 use dictation_platform::capture::CpalCapture;
+#[cfg(target_os = "linux")]
+use dictation_platform::capture::FfmpegCapture;
 use dictation_platform::inject::{StdoutInjector, XdotoolInjector};
 use dictation_platform::{AudioCapture, TextInjector};
 use dictation_ui::state::{self, SharedUi};
@@ -101,11 +103,9 @@ impl Daemon {
         let engine = Arc::clone(&self.engine);
         let stop = Arc::clone(&self.stop);
         let device = self.cfg.device.clone();
+        let mode = self.cfg.capture.clone();
         self.capture = Some(std::thread::spawn(move || {
-            let mut cap = CpalCapture::new();
-            if let Some(d) = device {
-                cap = cap.with_device(d);
-            }
+            let mut cap = build_capture(&mode, device);
             if let Err(e) = cap.start() {
                 tracing::error!(error = %e, "falha ao iniciar captura");
                 return;
@@ -185,6 +185,31 @@ fn build_asr(cfg: &Config) -> Arc<dyn AsrEngine> {
     } else {
         Arc::new(FallbackAsr::new(groq, local()))
     }
+}
+
+/// Escolhe o backend de captura. No Linux, prefere `ffmpeg` (robusto); `cpal` fica
+/// para o Windows e como opção (`capture = cpal`).
+fn build_capture(mode: &str, device: Option<String>) -> Box<dyn AudioCapture> {
+    #[cfg(target_os = "linux")]
+    {
+        let use_ffmpeg = match mode {
+            "ffmpeg" => true,
+            "cpal" => false,
+            _ => which("ffmpeg"),
+        };
+        if use_ffmpeg {
+            let mut c = FfmpegCapture::new();
+            if let Some(d) = device {
+                c = c.with_device(d);
+            }
+            return Box::new(c);
+        }
+    }
+    let mut c = CpalCapture::new();
+    if let Some(d) = device {
+        c = c.with_device(d);
+    }
+    Box::new(c)
 }
 
 fn notify(cfg: &Config, title: &str, body: &str) {

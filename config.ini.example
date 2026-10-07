@@ -12,6 +12,8 @@ language = pt
 model = whisper-large-v3-turbo
 ; dispositivo/fonte de captura vazio = automático (prefere pipewire/pulse no Linux)
 device =
+; backend de captura: ffmpeg (robusto, Linux) | cpal (portável, Windows) | vazio = automático
+capture =
 ; limite de segurança da gravação (segundos)
 max_seconds = 180
 ; como digitar o texto: type (xdotool, universal) | clipboard (Ctrl+V) | stdout

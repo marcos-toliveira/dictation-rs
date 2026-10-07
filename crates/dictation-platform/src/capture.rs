@@ -74,6 +74,9 @@ impl AudioCapture for CpalCapture {
     fn start(&mut self) -> Result<(), CaptureError> {
         let host = cpal::default_host();
         let device = self.pick_device(&host)?;
+        if let Ok(name) = device.name() {
+            tracing::info!(device = %name, "dispositivo de captura");
+        }
         let config = device
             .default_input_config()
             .map_err(|e| CaptureError::Device(e.to_string()))?;
@@ -219,6 +222,123 @@ fn default_candidates() -> Vec<String> {
 #[cfg(not(target_os = "linux"))]
 fn default_candidates() -> Vec<String> {
     Vec::new()
+}
+
+/// Captura via `ffmpeg` (Linux: PulseAudio/PipeWire) — **robusto** onde o cpal/ALSA
+/// desta máquina falha intermitentemente (panic de buffer no backend ALSA).
+#[cfg(target_os = "linux")]
+pub struct FfmpegCapture {
+    source: Option<String>,
+    child: Option<std::process::Child>,
+    reader: Option<std::io::BufReader<std::process::ChildStdout>>,
+}
+
+#[cfg(target_os = "linux")]
+impl FfmpegCapture {
+    pub fn new() -> Self {
+        Self {
+            source: None,
+            child: None,
+            reader: None,
+        }
+    }
+
+    /// Fonte PulseAudio/PipeWire (`None` = fonte padrão via `pactl`).
+    pub fn with_device(mut self, name: impl Into<String>) -> Self {
+        self.source = Some(name.into());
+        self
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Default for FfmpegCapture {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Fonte padrão do PulseAudio/PipeWire (`pactl get-default-source`), como no Python.
+#[cfg(target_os = "linux")]
+pub fn pulse_default_source() -> String {
+    if let Ok(o) = std::process::Command::new("pactl")
+        .args(["get-default-source"])
+        .output()
+    {
+        if o.status.success() {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if !s.is_empty() {
+                return s;
+            }
+        }
+    }
+    "default".into()
+}
+
+#[cfg(target_os = "linux")]
+impl AudioCapture for FfmpegCapture {
+    fn start(&mut self) -> Result<(), CaptureError> {
+        use std::process::{Command, Stdio};
+        let source = self.source.clone().unwrap_or_else(pulse_default_source);
+        let mut child = Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "pulse",
+                "-i",
+                &source,
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-f",
+                "s16le",
+                "-",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| CaptureError::Device(format!("ffmpeg: {e}")))?;
+
+        // Se o ffmpeg morrer logo no início, a fonte é inválida.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(CaptureError::Device(format!(
+                "ffmpeg saiu ({status}) — fonte '{source}' inválida?"
+            )));
+        }
+
+        let out = child
+            .stdout
+            .take()
+            .ok_or_else(|| CaptureError::Stream("ffmpeg sem stdout".into()))?;
+        self.reader = Some(std::io::BufReader::new(out));
+        self.child = Some(child);
+        Ok(())
+    }
+
+    fn recv(&mut self) -> Option<Vec<i16>> {
+        use std::io::Read;
+        let mut buf = vec![0u8; 3200]; // 100 ms @ 16 kHz mono s16le
+        let n = self.reader.as_mut()?.read(&mut buf).ok()?;
+        if n < 2 {
+            return None;
+        }
+        buf.truncate(n - (n % 2));
+        let (pairs, _) = buf.as_chunks::<2>();
+        Some(pairs.iter().map(|p| i16::from_le_bytes(*p)).collect())
+    }
+
+    fn stop(&mut self) -> Result<(), CaptureError> {
+        if let Some(mut c) = self.child.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+        self.reader = None;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
