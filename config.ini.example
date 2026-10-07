@@ -1,0 +1,46 @@
+; ==============================================================================
+; config.ini — ditado por voz (dictation-rs)
+; Copiado para ~/.config/dictation/config.ini pelo install.sh
+; (mesmo formato do dictation em Python — a troca é drop-in)
+; ==============================================================================
+[dictation]
+; provedor de transcrição: groq (online, recomendado) | local (whisper.cpp)
+provider = groq
+; idioma falado (ISO-639-1). Use "auto" para detectar.
+language = pt
+; modelo do Groq (ou override via GROQ_MODEL no cofre)
+model = whisper-large-v3-turbo
+; dispositivo/fonte de captura vazio = automático (prefere pipewire/pulse no Linux)
+device =
+; limite de segurança da gravação (segundos)
+max_seconds = 180
+; como digitar o texto: type (xdotool, universal) | clipboard (Ctrl+V) | stdout
+inject = type
+type_delay_ms = 6
+trailing_space = true
+notify = true
+; indicador flutuante "REC" ancorado na janela em foco (click-through)
+indicator = true
+; posição: bottom-right | bottom-center | top-right | top-left
+indicator_anchor = bottom-right
+; prévia ao vivo do texto enquanto fala (só com provider=groq)
+preview = true
+preview_interval_ms = 1500
+; posição da prévia: bottom-center | bottom-right | top-right | top-left
+preview_anchor = bottom-center
+; segmentação append-only (custo linear; evita "texto antigo no meio do novo")
+segment_seconds = 10.0
+overlap_seconds = 0.5
+min_segment_seconds = 0.3
+
+[paths]
+vault = ~/.config/anubis/groq.env
+vocab = ~/.config/dictation/vocab.txt
+corrections = ~/.config/dictation/corrections.tsv
+state_dir = ~/.local/state/dictation
+
+[local]
+; fallback offline (whisper.cpp)
+whisper_bin = ~/.local/bin/whisper-cli
+model = ~/.local/share/whisper.cpp/models/ggml-small.bin
+threads = 4
