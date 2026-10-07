@@ -7,7 +7,7 @@
 //! Config: `~/.config/dictation/config.ini` (o mesmo do Python) ou `$DICTATION_CONFIG`.
 
 use dictation_core::{AsrEngine, AsrOptions, Config, InjectMode, Provider};
-use dictation_daemon::{read_last, save_last, teach, Engine, FallbackAsr, LocalWhisper};
+use dictation_daemon::{read_last, save_last, teach, Engine, FallbackAsr, LocalWhisper, RetryAsr};
 use dictation_groq::GroqEngine;
 use dictation_platform::capture::CpalCapture;
 #[cfg(target_os = "linux")]
@@ -111,8 +111,12 @@ impl Daemon {
                 return;
             }
             while !stop.load(Ordering::SeqCst) {
-                if let Some(block) = cap.recv() {
-                    engine.lock().unwrap().push_audio(&block);
+                match cap.recv() {
+                    Some(block) => {
+                        engine.lock().unwrap().push_audio(&block);
+                    }
+                    // Fonte encerrou (ex.: ffmpeg morreu) — sai do loop (o watchdog finaliza).
+                    None => break,
                 }
             }
             let _ = cap.stop();
@@ -124,6 +128,13 @@ impl Daemon {
         if !self.recording {
             return "nada gravando".into();
         }
+        self.end_recording();
+        self.finish_session();
+        "transcrevendo".to_string()
+    }
+
+    /// Encerra o estado de gravação (captura + UI + bandeja).
+    fn end_recording(&mut self) {
         self.recording = false;
         self.stop.store(true, Ordering::SeqCst);
         if let Some(h) = self.capture.take() {
@@ -135,8 +146,10 @@ impl Daemon {
             ui.preview.clear();
         }
         self.update_tray(false);
+    }
 
-        // Finaliza em thread separada (transcrição + injeção) — resposta imediata.
+    /// Transcreve a cauda + finaliza + injeta (em thread separada).
+    fn finish_session(&self) {
         let engine = Arc::clone(&self.engine);
         let cfg = self.cfg.clone();
         std::thread::spawn(move || {
@@ -149,7 +162,6 @@ impl Daemon {
                 None => notify(&cfg, "⚠️ dictation", "nada reconhecido"),
             }
         });
-        "transcrevendo".to_string()
     }
 
     fn update_tray(&self, recording: bool) {
@@ -183,7 +195,9 @@ fn build_asr(cfg: &Config) -> Arc<dyn AsrEngine> {
     if cfg.provider == Provider::Local {
         local()
     } else {
-        Arc::new(FallbackAsr::new(groq, local()))
+        // Retry no Groq (429) antes de cair para o local (lento).
+        let groq_retry = Arc::new(RetryAsr::new(groq, 3));
+        Arc::new(FallbackAsr::new(groq_retry, local()))
     }
 }
 
@@ -372,6 +386,26 @@ fn main() {
     {
         let d = Arc::clone(&daemon);
         std::thread::spawn(move || run_preview(d));
+    }
+
+    // Watchdog: se a captura morrer sozinha, finaliza (não fica preso em "gravando").
+    {
+        let d = Arc::clone(&daemon);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(1000));
+            let mut daemon = d.lock().unwrap();
+            if daemon.recording
+                && daemon
+                    .capture
+                    .as_ref()
+                    .map(|h| h.is_finished())
+                    .unwrap_or(false)
+            {
+                tracing::warn!("captura encerrou sozinha; finalizando");
+                daemon.end_recording();
+                daemon.finish_session();
+            }
+        });
     }
 
     tracing::info!("dictationd pronto");

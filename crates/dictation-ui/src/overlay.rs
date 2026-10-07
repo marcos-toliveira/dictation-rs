@@ -2,11 +2,22 @@
 //!
 //! Uma única janela transparente, click-through e always-on-top, reancorada na
 //! janela em foco (badge em `indicator_anchor`; bolha em `preview_anchor`).
+//!
+//! **Tamanho fixo** por estado (só-badge vs com-texto): a janela não redimensiona
+//! a cada atualização da prévia, então o badge REC não "pula" (a borda superior
+//! fica estável, já que a âncora é na base).
 
 use crate::state::SharedUi;
 use crate::{anchor, x11};
 use eframe::egui;
 use std::time::Duration;
+
+/// Tamanho da janela só-badge.
+const BADGE: egui::Vec2 = egui::vec2(74.0, 38.0);
+/// Tamanho da janela com prévia (fixo, para o layout não oscilar).
+const BUBBLE: egui::Vec2 = egui::vec2(640.0, 110.0);
+/// Máximo de caracteres exibidos na prévia (mostra o fim, mais recente).
+const PREVIEW_MAX: usize = 300;
 
 pub struct OverlayApp {
     pub state: SharedUi,
@@ -26,10 +37,20 @@ impl OverlayApp {
             preview_anchor,
             phase: 0.0,
             last_reposition: -1.0,
-            last_size: (74.0, 38.0),
+            last_size: (0.0, 0.0),
             last_win: None,
         }
     }
+}
+
+/// Mostra o fim do texto (o mais recente), limitado a `max` caracteres.
+fn tail(text: &str, max: usize) -> String {
+    let count = text.chars().count();
+    if count <= max {
+        return text.to_string();
+    }
+    let skip = count - max;
+    format!("…{}", text.chars().skip(skip).collect::<String>())
 }
 
 impl eframe::App for OverlayApp {
@@ -45,7 +66,7 @@ impl eframe::App for OverlayApp {
         };
         let has_text = !preview.is_empty();
 
-        // Sem gravação e sem prévia: esconde a janela (não ocupa a tela).
+        // Sem gravação e sem prévia: esconde a janela.
         if !recording && !has_text {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             ctx.request_repaint_after(Duration::from_millis(250));
@@ -55,7 +76,8 @@ impl eframe::App for OverlayApp {
 
         self.phase += 0.14;
         let pulse = 0.5 + 0.5 * self.phase.sin();
-        let width = if has_text { 640.0 } else { 74.0 };
+        let size = if has_text { BUBBLE } else { BADGE };
+        let shown = tail(&preview, PREVIEW_MAX);
 
         let frame = egui::Frame::NONE
             .fill(egui::Color32::from_rgba_unmultiplied(18, 18, 18, 205))
@@ -63,12 +85,15 @@ impl eframe::App for OverlayApp {
             .inner_margin(egui::Margin::symmetric(12, 8))
             .shadow(egui::epaint::Shadow::NONE);
 
-        let resp = frame.show(ui, |ui| {
-            ui.set_max_width(width - 24.0);
+        frame.show(ui, |ui| {
+            let w = size.x - 24.0;
+            ui.set_min_width(w);
+            ui.set_max_width(w);
             ui.horizontal(|ui| {
+                // Alocação FIXA do ponto (o raio pulsante não muda o layout).
+                let d = 16.0;
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(d, d), egui::Sense::hover());
                 let r = 5.0 + 3.0 * pulse;
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(r * 2.0, r * 2.0), egui::Sense::hover());
                 ui.painter().circle_filled(
                     rect.center(),
                     r,
@@ -84,19 +109,23 @@ impl eframe::App for OverlayApp {
             if has_text {
                 ui.add_space(2.0);
                 ui.add(
-                    egui::Label::new(egui::RichText::new(&preview).size(14.0))
+                    egui::Label::new(egui::RichText::new(&shown).size(14.0))
                         .wrap()
                         .selectable(false),
                 );
             }
         });
-        let size = resp.response.rect.size();
 
-        // Reancora periodicamente (como o `reposition()` do Python).
+        // Ajusta a janela ao tamanho fixo do estado (só quando muda).
+        if (size.x - self.last_size.0).abs() > 0.5 || (size.y - self.last_size.1).abs() > 0.5 {
+            self.last_size = (size.x, size.y);
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+        }
+
+        // Reancora periodicamente (sem depender do tamanho do conteúdo).
         let t = ctx.input(|i| i.time);
         if t - self.last_reposition > 0.7 {
             self.last_reposition = t;
-            // Enquanto o próprio overlay é a "janela ativa", mantém a última janela real.
             if let Some(win) = x11::active_window_rect() {
                 self.last_win = Some(win);
             }
@@ -113,12 +142,22 @@ impl eframe::App for OverlayApp {
             }
         }
 
-        // Ajusta a janela ao conteúdo (converge em 1-2 quadros).
-        if (size.x - self.last_size.0).abs() > 0.5 || (size.y - self.last_size.1).abs() > 0.5 {
-            self.last_size = (size.x, size.y);
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(size.x, size.y)));
-        }
-
         ctx.request_repaint_after(Duration::from_millis(60));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tail;
+
+    #[test]
+    fn tail_keeps_short_text() {
+        assert_eq!(tail("olá", 10), "olá");
+    }
+
+    #[test]
+    fn tail_shows_the_end() {
+        let t = tail("abcdefghij", 4);
+        assert_eq!(t, "…ghij");
     }
 }

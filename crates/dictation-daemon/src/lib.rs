@@ -130,6 +130,51 @@ impl Engine {
             _ => None,
         }
     }
+
+    // ---- API de baixo nível (a captura NUNCA bloqueia em HTTP) ----------------
+
+    /// Segmenta o áudio e devolve os segmentos prontos (PCM), **sem** transcrever.
+    pub fn push_audio_raw(&mut self, samples: &[i16]) -> Vec<(SessionId, Vec<i16>)> {
+        self.pipeline
+            .push_audio(samples)
+            .into_iter()
+            .map(|(id, seg)| (id, seg.pcm))
+            .collect()
+    }
+
+    /// Encerra a captura e devolve a cauda (PCM), sem transcrever.
+    pub fn flush_raw(&mut self) -> Result<Option<(SessionId, Vec<i16>)>, String> {
+        self.pipeline
+            .stop()
+            .map(|o| o.map(|(id, seg)| (id, seg.pcm)))
+            .map_err(|e| e.to_string())
+    }
+
+    /// Aplica um texto transcrito à sessão corrente (descarta se superada).
+    pub fn accept_text(&mut self, id: SessionId, text: &str) -> bool {
+        self.pipeline.accept(id, text)
+    }
+
+    /// Finaliza e devolve o texto (com correções), **sem** injetar.
+    pub fn finish_text(&mut self) -> Result<Option<String>, String> {
+        match self.pipeline.finish() {
+            Ok(Some(text)) => Ok(Some(self.corrections.apply(&text))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Injeta o texto no app em foco.
+    pub fn inject(&self, text: &str) {
+        if let Err(e) = self.injector.inject(text) {
+            tracing::error!(error = %e, "falha ao injetar texto");
+        }
+    }
+
+    /// Cauda de áudio em formação (para a prévia).
+    pub fn pending_pcm(&self) -> Vec<i16> {
+        self.pipeline.pending_pcm()
+    }
 }
 
 /// ASR local (fallback offline) via `whisper.cpp` (`whisper-cli`).
@@ -239,6 +284,58 @@ impl AsrEngine for FallbackAsr {
                 self.fallback.transcribe(wav, opts)
             }
         }
+    }
+}
+
+/// ASR com **retry** em rate limit (HTTP 429), respeitando o `try again in Ns`.
+pub struct RetryAsr {
+    inner: Arc<dyn AsrEngine>,
+    attempts: u32,
+}
+
+impl RetryAsr {
+    pub fn new(inner: Arc<dyn AsrEngine>, attempts: u32) -> Self {
+        Self {
+            inner,
+            attempts: attempts.max(1),
+        }
+    }
+}
+
+/// Segundos sugeridos por um erro 429 (`try again in Ns`), se houver.
+fn retry_after_secs(e: &AsrError) -> Option<u64> {
+    let AsrError::Http { status, body } = e else {
+        return None;
+    };
+    if *status != 429 {
+        return None;
+    }
+    let idx = body.find("try again in ")?;
+    let rest = &body[idx + "try again in ".len()..];
+    let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    num.parse::<u64>().ok()
+}
+
+impl AsrEngine for RetryAsr {
+    fn transcribe(&self, wav: &[u8], opts: &AsrOptions) -> Result<String, AsrError> {
+        let mut last: Option<AsrError> = None;
+        for i in 0..self.attempts {
+            match self.inner.transcribe(wav, opts) {
+                Ok(t) => return Ok(t),
+                Err(e) => {
+                    let wait = retry_after_secs(&e);
+                    last = Some(e);
+                    if let Some(secs) = wait {
+                        if i + 1 < self.attempts {
+                            std::thread::sleep(std::time::Duration::from_secs(secs.min(10)));
+                            continue;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        Err(last.expect("ao menos uma tentativa"))
     }
 }
 
@@ -402,6 +499,31 @@ mod tests {
         let asr = FallbackAsr::new(primary, fallback);
         let text = asr.transcribe(b"x", &AsrOptions::default()).unwrap();
         assert_eq!(text, "local");
+    }
+
+    #[test]
+    fn retry_on_rate_limit() {
+        let inner = Arc::new(MockAsr::new(vec![
+            Err(AsrError::Http {
+                status: 429,
+                body: "try again in 0s".into(),
+            }),
+            Ok("ok".into()),
+        ]));
+        let asr = RetryAsr::new(inner.clone(), 2);
+        assert_eq!(asr.transcribe(b"x", &AsrOptions::default()).unwrap(), "ok");
+        assert_eq!(inner.calls().len(), 2);
+    }
+
+    #[test]
+    fn no_retry_on_other_errors() {
+        let inner = Arc::new(MockAsr::new(vec![
+            Err(AsrError::Network("x".into())),
+            Ok("nao-usado".into()),
+        ]));
+        let asr = RetryAsr::new(inner.clone(), 3);
+        assert!(asr.transcribe(b"x", &AsrOptions::default()).is_err());
+        assert_eq!(inner.calls().len(), 1);
     }
 
     #[test]

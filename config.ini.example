@@ -25,8 +25,10 @@ notify = true
 indicator = true
 ; posição: bottom-right | bottom-center | top-right | top-left
 indicator_anchor = bottom-right
-; prévia ao vivo do texto enquanto fala (só com provider=groq)
-preview = true
+; prévia ao vivo do texto enquanto fala (só com provider=groq).
+; DESLIGADA por padrão: ela re-transcreve o acumulado e consome o limite do Groq
+; (20 req/min) — pode estourar (HTTP 429) em falas longas.
+preview = false
 preview_interval_ms = 1500
 ; posição da prévia: bottom-center | bottom-right | top-right | top-left
 preview_anchor = bottom-center
