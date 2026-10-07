@@ -61,7 +61,7 @@ impl Default for Config {
         Self {
             provider: Provider::Groq,
             language: "pt".into(),
-            model: "whisper-large-v3-turbo".into(),
+            model: "whisper-large-v3".into(),
             device: None,
             capture: String::new(),
             max_seconds: 180,

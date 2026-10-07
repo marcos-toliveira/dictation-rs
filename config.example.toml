@@ -4,7 +4,7 @@
 # groq (online) | local (whisper.cpp — ainda não implementado no daemon)
 provider = "groq"
 language = "pt"
-model = "whisper-large-v3-turbo"
+model = "whisper-large-v3"
 
 # Dispositivo de captura (vazio = automático: prefere pipewire/pulse no Linux)
 # device = "pipewire"

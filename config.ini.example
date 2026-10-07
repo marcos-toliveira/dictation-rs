@@ -9,7 +9,7 @@ provider = groq
 ; idioma falado (ISO-639-1). Use "auto" para detectar.
 language = pt
 ; modelo do Groq (ou override via GROQ_MODEL no cofre)
-model = whisper-large-v3-turbo
+model = whisper-large-v3
 ; dispositivo/fonte de captura vazio = automático (prefere pipewire/pulse no Linux)
 device =
 ; backend de captura: ffmpeg (robusto, Linux) | cpal (portável, Windows) | vazio = automático
