@@ -5,9 +5,12 @@
 //! viram comportamento observável: **uma injeção por sessão** e **texto monotônico**.
 
 use dictation_core::{
-    audio, AsrEngine, AsrOptions, Config, Corrections, Pipeline, SegmenterConfig, SessionId,
+    audio, AsrEngine, AsrError, AsrOptions, Config, Corrections, Pipeline, SegmenterConfig,
+    SessionId,
 };
 use dictation_platform::TextInjector;
+use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 
 /// Orquestra captura → segmentação → transcrição → injeção para uma configuração.
@@ -51,6 +54,31 @@ impl Engine {
 
     pub fn session_id(&self) -> Option<SessionId> {
         self.pipeline.session_id()
+    }
+
+    /// Opções de ASR em uso (para a prévia reusar o mesmo modelo/idioma/prompt).
+    pub fn options(&self) -> AsrOptions {
+        self.opts.clone()
+    }
+
+    /// Texto já comprometido (segmentos transcritos).
+    pub fn committed_text(&self) -> String {
+        self.pipeline.committed_text()
+    }
+
+    /// Cauda de áudio (WAV) ainda não transcrita — para a prévia ao vivo.
+    /// Só devolve algo a partir de ~0,5s (evita chamadas inúteis ao ASR).
+    pub fn pending_wav(&self) -> Option<Vec<u8>> {
+        let pcm = self.pipeline.pending_pcm();
+        if pcm.len() < (audio::SAMPLE_RATE as usize) / 2 {
+            return None;
+        }
+        Some(audio::raw_to_wav(
+            &pcm,
+            audio::SAMPLE_RATE,
+            audio::CHANNELS,
+            audio::BITS_PER_SAMPLE,
+        ))
     }
 
     /// Inicia uma sessão (falha se já houver gravação).
@@ -104,6 +132,116 @@ impl Engine {
     }
 }
 
+/// ASR local (fallback offline) via `whisper.cpp` (`whisper-cli`).
+pub struct LocalWhisper {
+    bin: PathBuf,
+    model: PathBuf,
+    language: String,
+    threads: u32,
+    work_dir: PathBuf,
+}
+
+impl LocalWhisper {
+    pub fn new(
+        bin: PathBuf,
+        model: PathBuf,
+        language: String,
+        threads: u32,
+        work_dir: PathBuf,
+    ) -> Self {
+        Self {
+            bin,
+            model,
+            language,
+            threads,
+            work_dir,
+        }
+    }
+}
+
+impl AsrEngine for LocalWhisper {
+    fn transcribe(&self, wav: &[u8], opts: &AsrOptions) -> Result<String, AsrError> {
+        std::fs::create_dir_all(&self.work_dir).map_err(|e| AsrError::Network(e.to_string()))?;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = self
+            .work_dir
+            .join(format!("tmp-{}-{nanos}.wav", std::process::id()));
+        std::fs::write(&path, wav).map_err(|e| AsrError::Network(e.to_string()))?;
+
+        let lang = if self.language.is_empty() {
+            "auto".to_string()
+        } else {
+            self.language.clone()
+        };
+        let mut cmd = Command::new(&self.bin);
+        cmd.args([
+            "-m",
+            &self.model.to_string_lossy(),
+            "-f",
+            &path.to_string_lossy(),
+            "-l",
+            &lang,
+            "-t",
+            &self.threads.to_string(),
+            "-nt",
+            "-np",
+            "-bs",
+            "1",
+        ]);
+        if let Some(prompt) = opts.prompt.as_deref().filter(|p| !p.is_empty()) {
+            cmd.args(["--prompt", prompt]);
+        }
+        let out = cmd.output();
+        let _ = std::fs::remove_file(&path);
+
+        match out {
+            Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_string()),
+            Ok(o) => Err(AsrError::Network(format!(
+                "whisper-cli falhou: {}",
+                String::from_utf8_lossy(&o.stderr)
+                    .chars()
+                    .take(200)
+                    .collect::<String>()
+            ))),
+            Err(e) => Err(AsrError::Network(e.to_string())),
+        }
+    }
+}
+
+/// ASR com fallback: tenta o primário (Groq) e, em erro, usa o secundário (local).
+pub struct FallbackAsr {
+    primary: Arc<dyn AsrEngine>,
+    fallback: Arc<dyn AsrEngine>,
+}
+
+impl FallbackAsr {
+    pub fn new(primary: Arc<dyn AsrEngine>, fallback: Arc<dyn AsrEngine>) -> Self {
+        Self { primary, fallback }
+    }
+}
+
+impl AsrEngine for FallbackAsr {
+    fn transcribe(&self, wav: &[u8], opts: &AsrOptions) -> Result<String, AsrError> {
+        match self.primary.transcribe(wav, opts) {
+            Ok(t) => Ok(t),
+            Err(e) => {
+                tracing::warn!(error = %e, "ASR primário falhou; caindo para o local");
+                self.fallback.transcribe(wav, opts)
+            }
+        }
+    }
+}
+
 /// Monta o `prompt` de vocabulário a partir do arquivo (linhas não-comentário, vírgula).
 pub fn build_prompt(vocab: &str) -> String {
     let terms: Vec<&str> = vocab
@@ -113,6 +251,65 @@ pub fn build_prompt(vocab: &str) -> String {
         .collect();
     let joined = terms.join(", ");
     joined.chars().take(800).collect()
+}
+
+/// Extrai a origem de uma regra de correção (`errado<TAB>certo` ou `errado=>certo`).
+fn rule_source(line: &str) -> Option<&str> {
+    if let Some((a, _)) = line.split_once('\t') {
+        Some(a.trim())
+    } else {
+        line.split_once("=>").map(|(a, _)| a.trim())
+    }
+}
+
+/// Ensina uma correção: grava `errado<TAB>certo` (substituindo regra anterior) e,
+/// opcionalmente, adiciona o termo correto ao vocabulário.
+pub fn teach(cfg: &Config, wrong: &str, right: &str, add_vocab: bool) -> std::io::Result<()> {
+    if let Some(parent) = cfg.corrections.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut lines: Vec<String> = if cfg.corrections.is_file() {
+        std::fs::read_to_string(&cfg.corrections)?
+            .lines()
+            .map(String::from)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    lines.retain(|l| {
+        rule_source(l)
+            .map(|s| !s.eq_ignore_ascii_case(wrong))
+            .unwrap_or(true)
+    });
+    lines.push(format!("{wrong}\t{right}"));
+    std::fs::write(&cfg.corrections, lines.join("\n") + "\n")?;
+
+    if add_vocab {
+        let mut terms: Vec<String> = if cfg.vocab.is_file() {
+            std::fs::read_to_string(&cfg.vocab)?
+                .lines()
+                .map(String::from)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if !terms.iter().any(|t| t.trim() == right) {
+            terms.push(right.to_string());
+            std::fs::write(&cfg.vocab, terms.join("\n") + "\n")?;
+        }
+    }
+    Ok(())
+}
+
+/// Salva a última transcrição em `state_dir/last.txt`.
+pub fn save_last(cfg: &Config, text: &str) {
+    let _ = std::fs::create_dir_all(&cfg.state_dir);
+    let _ = std::fs::write(cfg.state_dir.join("last.txt"), text);
+}
+
+/// Lê a última transcrição.
+pub fn read_last(cfg: &Config) -> String {
+    std::fs::read_to_string(cfg.state_dir.join("last.txt")).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -176,10 +373,70 @@ mod tests {
         let inj = Arc::new(MockInjector::new());
         let mut engine = Engine::new(&c, asr, inj.clone());
         engine.start().unwrap();
-        engine.push_audio(&vec![0i16; audio::SAMPLE_RATE as usize + 1]);
+        let samples = [0i16; audio::SAMPLE_RATE as usize + 1];
+        engine.push_audio(&samples);
         engine.stop_and_finish();
         assert_eq!(inj.injected(), vec!["OpenCode".to_string()]);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn pending_wav_only_after_half_second() {
+        let asr = Arc::new(MockAsr::new(vec![]));
+        let inj = Arc::new(MockInjector::new());
+        let mut engine = Engine::new(&cfg(), asr, inj);
+        engine.start().unwrap();
+        engine.push_audio(&[0i16; 100]); // pouca coisa
+        assert!(engine.pending_wav().is_none());
+        let half = [0i16; (audio::SAMPLE_RATE as usize) / 2 + 1];
+        engine.push_audio(&half);
+        assert!(engine.pending_wav().is_some());
+    }
+
+    #[test]
+    fn fallback_uses_secondary_on_primary_error() {
+        let primary = Arc::new(MockAsr::new(vec![Err(AsrError::Network(
+            "sem rede".into(),
+        ))]));
+        let fallback = Arc::new(MockAsr::new(vec![Ok("local".into())]));
+        let asr = FallbackAsr::new(primary, fallback);
+        let text = asr.transcribe(b"x", &AsrOptions::default()).unwrap();
+        assert_eq!(text, "local");
+    }
+
+    #[test]
+    fn teach_writes_and_replaces_rule() {
+        let dir = std::env::temp_dir().join(format!("dictation-teach-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let c = Config {
+            corrections: dir.join("corrections.tsv"),
+            vocab: dir.join("vocab.txt"),
+            ..Config::default()
+        };
+        teach(&c, "teh", "the", true).unwrap();
+        teach(&c, "teh", "THE", false).unwrap(); // substitui
+        let content = std::fs::read_to_string(&c.corrections).unwrap();
+        assert_eq!(
+            content.matches("teh").count(),
+            1,
+            "regra deve ser substituída"
+        );
+        assert!(content.contains("teh\tTHE"));
+        let vocab = std::fs::read_to_string(&c.vocab).unwrap();
+        assert!(vocab.contains("the"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_and_read_last() {
+        let dir = std::env::temp_dir().join(format!("dictation-last-{}", std::process::id()));
+        let c = Config {
+            state_dir: dir.clone(),
+            ..Config::default()
+        };
+        save_last(&c, "olá mundo");
+        assert_eq!(read_last(&c), "olá mundo");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

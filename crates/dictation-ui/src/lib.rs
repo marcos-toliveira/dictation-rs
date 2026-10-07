@@ -8,6 +8,7 @@ use eframe::egui;
 pub mod anchor;
 pub mod overlay;
 pub mod state;
+pub mod tray;
 pub mod x11;
 
 /// Opções da janela do overlay (frameless, translúcida, click-through, sempre no topo).

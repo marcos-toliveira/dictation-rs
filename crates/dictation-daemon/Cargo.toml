@@ -10,6 +10,7 @@ repository.workspace = true
 dictation-core = { path = "../dictation-core" }
 dictation-groq = { path = "../dictation-groq" }
 dictation-platform = { path = "../dictation-platform" }
+dictation-ui = { path = "../dictation-ui" }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

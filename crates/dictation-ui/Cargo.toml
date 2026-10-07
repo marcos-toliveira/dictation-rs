@@ -11,3 +11,4 @@ dictation-core = { path = "../dictation-core" }
 egui = "0.36"
 eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
 tracing = { workspace = true }
+ksni = { version = "0.3", features = ["blocking"] }

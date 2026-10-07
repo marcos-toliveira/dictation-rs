@@ -12,3 +12,5 @@ path = "src/main.rs"
 
 [dependencies]
 dictation-core = { path = "../dictation-core" }
+dictation-groq = { path = "../dictation-groq" }
+dictation-platform = { path = "../dictation-platform" }
