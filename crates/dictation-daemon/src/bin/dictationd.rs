@@ -66,7 +66,12 @@ impl Daemon {
                         Ok(()) => format!("ok: '{w}' → '{r}'"),
                         Err(e) => format!("erro: {e}"),
                     },
-                    _ => "uso: dictation teach <errado> <certo> [--vocab]".into(),
+                    _ => {
+                        // Sem argumentos: abre o diálogo (fora do lock).
+                        let cfg = self.cfg.clone();
+                        std::thread::spawn(move || teach_dialog(&cfg));
+                        "aberto".into()
+                    }
                 }
             }
             "last" => read_last(&self.cfg),
@@ -198,6 +203,78 @@ fn which(prog: &str) -> bool {
 
 fn open(path: &std::path::Path) {
     let _ = Command::new("xdg-open").arg(path).status();
+}
+
+/// Texto selecionado (primary/clipboard) — preenche o campo "Errado".
+fn selection() -> Option<String> {
+    for sel in ["primary", "clipboard"] {
+        if let Ok(o) = Command::new("xclip")
+            .args(["-o", "-selection", sel])
+            .output()
+        {
+            if o.status.success() {
+                let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !s.is_empty() {
+                    return Some(s.chars().take(200).collect());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Pede uma entrada de texto (zenity ou kdialog).
+fn ask(title: &str, text: &str, default: &str) -> Option<String> {
+    let out = if which("zenity") {
+        Command::new("zenity")
+            .args([
+                "--entry",
+                "--title",
+                title,
+                "--text",
+                text,
+                "--entry-text",
+                default,
+            ])
+            .output()
+            .ok()?
+    } else if which("kdialog") {
+        Command::new("kdialog")
+            .args(["--title", title, "--inputbox", text, default])
+            .output()
+            .ok()?
+    } else {
+        return None;
+    };
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Diálogo de ensinar correção (F9): preenche "Errado" com a seleção e salva.
+fn teach_dialog(cfg: &Config) {
+    let wrong = ask(
+        "Ensinar correção",
+        "Errado (o que o ASR escreveu):",
+        &selection().unwrap_or_default(),
+    )
+    .unwrap_or_default();
+    if wrong.trim().is_empty() {
+        return;
+    }
+    let right = ask("Ensinar correção", "Certo (o que deveria ser):", "").unwrap_or_default();
+    if right.trim().is_empty() {
+        return;
+    }
+    match teach(cfg, wrong.trim(), right.trim(), false) {
+        Ok(()) => notify(
+            cfg,
+            "✅ dictation",
+            &format!("'{}' → '{}'", wrong.trim(), right.trim()),
+        ),
+        Err(e) => notify(cfg, "⚠️ dictation", &format!("erro: {e}")),
+    }
 }
 
 fn main() {

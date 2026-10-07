@@ -73,8 +73,9 @@ cargo run -p dictation-cli -- toggle      # inicia/para; ao parar, digita no app
 - [x] `dictation-groq` (multipart + mock HTTP tests)
 - [x] `dictation-platform` (cpal audio, X11 inject via xdotool, traits for overlay/tray/hotkey)
 - [x] `dictation-daemon` + `dictation-cli` (socket, end-to-end validated)
-- [ ] GUI: floating REC/preview overlay + tray (egui/winit + tray-icon)
-- [ ] Global hotkeys for the Rust binary (F8/F9)
+- [x] GUI: floating REC/preview overlay + tray (egui/eframe + ksni)
+- [x] Global hotkeys (F8/F9) via KGlobalAccel (`set-shortcut.sh`)
+- [x] `teach` (dialog via zenity/kdialog + CLI) and local whisper.cpp fallback
 - [ ] Wayland backend (feature-gated, later — on a Wayland machine)
 - [ ] Windows backend (feature-gated, later — on a Windows machine)
 
