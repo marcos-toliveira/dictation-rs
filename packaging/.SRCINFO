@@ -1,6 +1,6 @@
 pkgbase = dictation-rs
 	pkgdesc = Ditado por voz push-to-talk para Linux/X11 com ASR no Groq (reescrita em Rust)
-	pkgver = 0.1.1
+	pkgver = 0.1.2
 	pkgrel = 1
 	url = https://github.com/marcos-toliveira/dictation-rs
 	install = dictation-rs.install
@@ -33,7 +33,7 @@ pkgbase = dictation-rs
 	optdepends = whisper.cpp: transcrição offline (fallback sem rede)
 	provides = dictation
 	conflicts = dictation
-	source = dictation-rs-0.1.1.tar.gz::https://github.com/marcos-toliveira/dictation-rs/archive/refs/tags/v0.1.1.tar.gz
-	sha256sums = 6dc4fac9ee51a3f4db4fa1d060c436d9b0404200854d93a4ab1b3c293781083d
+	source = dictation-rs-0.1.2.tar.gz::https://github.com/marcos-toliveira/dictation-rs/archive/refs/tags/v0.1.2.tar.gz
+	sha256sums = 0c26c39a598c553bb55776e6eaeac9fa57aab04455707f7fa472720512e17e91
 
 pkgname = dictation-rs
