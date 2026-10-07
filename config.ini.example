@@ -26,8 +26,12 @@ indicator = true
 ; posição: bottom-right | bottom-center | top-right | top-left
 indicator_anchor = bottom-right
 ; prévia ao vivo do texto enquanto fala (só com provider=groq).
-; DESLIGADA por padrão: ela re-transcreve o acumulado e consome o limite do Groq
-; (20 req/min) — pode estourar (HTTP 429) em falas longas.
+; DESLIGADA por padrão. Limites do Groq (free, por ORGANIZAÇÃO):
+;   20 req/min · 2.000 req/dia · 7.200 seg de áudio/hora · 28.800 seg/dia
+;   (cada requisição conta no mínimo 10s de áudio)
+; A prévia re-transcreve o acumulado a cada preview_interval_ms; com 1500ms são
+; ~40 req/min → estoura o limite (HTTP 429). Ligando, use >= 5000ms e lembre que
+; os segmentos de 10s já consomem ~6 req/min. Neste hardware: manter desligado.
 preview = false
 preview_interval_ms = 1500
 ; posição da prévia: bottom-center | bottom-right | top-right | top-left

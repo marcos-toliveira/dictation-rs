@@ -22,3 +22,9 @@ MongoDB
 PipeWire
 whisper.cpp
 Parakeet
+Groq
+GroqCloud
+egui
+winit
+cpal
+KGlobalAccel

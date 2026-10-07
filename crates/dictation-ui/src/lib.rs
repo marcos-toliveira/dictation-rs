@@ -20,6 +20,8 @@ pub fn overlay_options(size: [f32; 2]) -> eframe::NativeOptions {
             .with_always_on_top()
             .with_mouse_passthrough(true)
             .with_window_type(egui::X11WindowType::Tooltip)
+            // Janela NÃO gerenciada pelo WM: não rouba foco nem aparece na barra/taskbar.
+            .with_override_redirect(true)
             .with_resizable(false)
             .with_taskbar(false)
             .with_inner_size(size),
