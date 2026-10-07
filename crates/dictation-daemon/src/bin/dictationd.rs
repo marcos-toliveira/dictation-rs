@@ -6,6 +6,8 @@
 //! Comandos do socket (uma linha): `start | stop | toggle | status | teach <e> <c> [--vocab] | last | quit`.
 //! Config: `~/.config/dictation/config.ini` ou `%APPDATA%\dictation\config.ini` ou `$DICTATION_CONFIG`.
 
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use dictation_core::{AsrEngine, AsrOptions, Config, InjectMode, Provider};
 use dictation_daemon::{read_last, save_last, teach, Engine, FallbackAsr, LocalWhisper, RetryAsr};
 use dictation_groq::GroqEngine;
