@@ -1,6 +1,6 @@
 # Maintainer: marcos-toliveira <marcostuliocdo.work@gmail.com>
 pkgname=dictation-rs
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Ditado por voz push-to-talk para Linux/X11 com ASR no Groq (reescrita em Rust)"
 arch=('x86_64')
@@ -36,7 +36,7 @@ provides=('dictation')
 conflicts=('dictation')
 install="$pkgname.install"
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('88819665307775c31dd8a556a83c5426c9aa8b8c0061bbb967db34169b834452')
+sha256sums=('6dc4fac9ee51a3f4db4fa1d060c436d9b0404200854d93a4ab1b3c293781083d')
 
 build() {
   cd "$pkgname-$pkgver"
