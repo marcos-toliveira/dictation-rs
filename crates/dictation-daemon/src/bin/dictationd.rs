@@ -143,6 +143,7 @@ impl Daemon {
         {
             let mut ui = self.ui.lock().unwrap();
             ui.recording = false;
+            ui.transcribing = true; // mostra "transcrevendo…" até injetar
             ui.preview.clear();
         }
         self.update_tray(false);
@@ -152,8 +153,12 @@ impl Daemon {
     fn finish_session(&self) {
         let engine = Arc::clone(&self.engine);
         let cfg = self.cfg.clone();
+        let ui = Arc::clone(&self.ui);
         std::thread::spawn(move || {
             let text = engine.lock().unwrap().stop_and_finish();
+            if let Ok(mut ui) = ui.lock() {
+                ui.transcribing = false;
+            }
             match text {
                 Some(t) => {
                     save_last(&cfg, &t);

@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 pub struct UiState {
     /// Está gravando? (mostra o badge REC)
     pub recording: bool,
+    /// Está transcrevendo (entre o F8 e a injeção)? (mostra "transcrevendo…")
+    pub transcribing: bool,
     /// Texto da prévia ao vivo (comprometido + cauda).
     pub preview: String,
 }

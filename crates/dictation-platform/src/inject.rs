@@ -60,7 +60,7 @@ impl Default for XdotoolInjector {
 
 #[cfg(feature = "x11")]
 impl XdotoolInjector {
-    /// Digita um trecho ASCII via `xdotool type`.
+    /// Digita um trecho via `xdotool type` (ASCII).
     fn type_ascii(&self, s: &str) -> Result<(), InjectError> {
         if s.is_empty() {
             return Ok(());
@@ -114,9 +114,10 @@ impl TextInjector for XdotoolInjector {
                 self.initial_delay_ms as u64,
             ));
         }
-        // `xdotool type` NÃO digita teclas mortas (á, ã, ç, ê…) no layout `br`:
-        // ele pula o caractere. Agrupamos ASCII em `type` e usamos `key Uxxxx`
-        // (keysym Unicode) para o resto — preserva os acentos.
+        // `xdotool type` PULA teclas mortas (á, ã, ç, ê) no layout `br`: enviamos
+        // ASCII por `type` e cada acento por `key Uxxxx`.
+        // Em apps Chromium/Electron isto ainda pode perder caractere — para esses,
+        // o modo confiável é `inject = clipboard`.
         let mut ascii = String::new();
         for ch in payload.chars() {
             if ch.is_ascii() {

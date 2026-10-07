@@ -60,14 +60,14 @@ impl eframe::App for OverlayApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        let (recording, preview) = {
+        let (recording, transcribing, preview) = {
             let s = self.state.lock().unwrap();
-            (s.recording, s.preview.trim().to_string())
+            (s.recording, s.transcribing, s.preview.trim().to_string())
         };
         let has_text = !preview.is_empty();
 
-        // Sem gravação e sem prévia: esconde a janela.
-        if !recording && !has_text {
+        // Esconde só quando não há nada para mostrar.
+        if !recording && !transcribing && !has_text {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
             ctx.request_repaint_after(Duration::from_millis(250));
             return;
@@ -76,7 +76,14 @@ impl eframe::App for OverlayApp {
 
         self.phase += 0.14;
         let pulse = 0.5 + 0.5 * self.phase.sin();
-        let size = if has_text { BUBBLE } else { BADGE };
+        let size = if has_text {
+            BUBBLE
+        } else if recording {
+            BADGE
+        } else {
+            // "transcrevendo…" precisa de mais largura que "REC".
+            egui::vec2(170.0, 38.0)
+        };
         let shown = tail(&preview, PREVIEW_MAX);
 
         let frame = egui::Frame::NONE
@@ -89,6 +96,11 @@ impl eframe::App for OverlayApp {
             let w = size.x - 24.0;
             ui.set_min_width(w);
             ui.set_max_width(w);
+            let (label, color) = if recording {
+                ("REC", egui::Color32::from_rgb(235, 45, 45))
+            } else {
+                ("transcrevendo…", egui::Color32::from_rgb(240, 180, 60))
+            };
             ui.horizontal(|ui| {
                 // Alocação FIXA do ponto (o raio pulsante não muda o layout).
                 let d = 16.0;
@@ -98,13 +110,13 @@ impl eframe::App for OverlayApp {
                     rect.center(),
                     r,
                     egui::Color32::from_rgba_unmultiplied(
-                        235,
-                        45,
-                        45,
+                        color.r(),
+                        color.g(),
+                        color.b(),
                         (180.0 + 75.0 * pulse) as u8,
                     ),
                 );
-                ui.label(egui::RichText::new("REC").strong().size(12.0));
+                ui.label(egui::RichText::new(label).strong().size(12.0));
             });
             if has_text {
                 ui.add_space(2.0);
