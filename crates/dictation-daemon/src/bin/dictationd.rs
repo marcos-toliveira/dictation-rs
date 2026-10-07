@@ -460,23 +460,13 @@ fn run_preview(daemon: Arc<Mutex<Daemon>>) {
                 continue;
             }
             let e = d.engine.lock().unwrap();
-            (
-                e.pending_wav(),
-                e.committed_text(),
-                Arc::clone(&d.asr),
-                d.opts.clone(),
-            )
+            (e.preview_wav(), Arc::clone(&d.asr), d.opts.clone())
         };
-        let (Some(wav), committed, asr, opts) = snapshot else {
+        let (Some(wav), asr, opts) = snapshot else {
             continue;
         };
-        if let Ok(tail) = asr.transcribe(&wav, &opts) {
-            let preview = if committed.is_empty() {
-                tail
-            } else {
-                format!("{committed} {tail}")
-            };
-            daemon.lock().unwrap().ui.lock().unwrap().preview = preview;
+        if let Ok(t) = asr.transcribe(&wav, &opts) {
+            daemon.lock().unwrap().ui.lock().unwrap().preview = t;
         }
     }
 }

@@ -16,6 +16,7 @@ use std::sync::Arc;
 /// Orquestra captura → segmentação → transcrição → injeção para uma configuração.
 pub struct Engine {
     pipeline: Pipeline,
+    full_pcm: Vec<i16>,
     asr: Arc<dyn AsrEngine>,
     injector: Arc<dyn TextInjector>,
     opts: AsrOptions,
@@ -37,6 +38,7 @@ impl Engine {
         let corrections = Corrections::from_file(&cfg.corrections).unwrap_or_default();
         Self {
             pipeline: Pipeline::new(seg),
+            full_pcm: Vec::new(),
             asr,
             injector,
             opts: AsrOptions {
@@ -61,20 +63,16 @@ impl Engine {
         self.opts.clone()
     }
 
-    /// Texto já comprometido (segmentos transcritos).
-    pub fn committed_text(&self) -> String {
-        self.pipeline.committed_text()
-    }
-
-    /// Cauda de áudio (WAV) ainda não transcrita — para a prévia ao vivo.
-    /// Só devolve algo a partir de ~0,5s (evita chamadas inúteis ao ASR).
-    pub fn pending_wav(&self) -> Option<Vec<u8>> {
-        let pcm = self.pipeline.pending_pcm();
-        if pcm.len() < (audio::SAMPLE_RATE as usize) / 2 {
+    /// Áudio recente da sessão (WAV) — para a prévia ao vivo (se ligada).
+    /// Devolve a partir de ~1s de áudio (evita chamadas inúteis ao ASR).
+    pub fn preview_wav(&self) -> Option<Vec<u8>> {
+        let sr = audio::SAMPLE_RATE as usize;
+        if self.full_pcm.len() < sr {
             return None;
         }
+        let start = self.full_pcm.len().saturating_sub(sr * 8); // cauda dos últimos ~8s
         Some(audio::raw_to_wav(
-            &pcm,
+            &self.full_pcm[start..],
             audio::SAMPLE_RATE,
             audio::CHANNELS,
             audio::BITS_PER_SAMPLE,
@@ -83,45 +81,29 @@ impl Engine {
 
     /// Inicia uma sessão (falha se já houver gravação).
     pub fn start(&mut self) -> Result<SessionId, String> {
-        self.pipeline.start().map_err(|e| e.to_string())
+        let id = self.pipeline.start().map_err(|e| e.to_string())?;
+        self.full_pcm.clear();
+        Ok(id)
     }
 
-    /// Recebe áudio: segmenta e transcreve o que estiver pronto. Retorna quantos
-    /// segmentos foram transcritos.
-    pub fn push_audio(&mut self, samples: &[i16]) -> usize {
-        let ready = self.pipeline.push_audio(samples);
-        let n = ready.len();
-        for (id, seg) in ready {
-            let wav = audio::raw_to_wav(
-                &seg.pcm,
-                audio::SAMPLE_RATE,
-                audio::CHANNELS,
-                audio::BITS_PER_SAMPLE,
-            );
-            if let Ok(text) = self.asr.transcribe(&wav, &self.opts) {
-                self.pipeline.accept(id, &text);
-            }
+    /// Acumula o áudio da sessão. **Não** transcreve agora — a transcrição é
+    /// única, no `stop` (áudio inteiro, com contexto completo).
+    pub fn push_audio(&mut self, samples: &[i16]) {
+        if self.pipeline.is_recording() {
+            self.full_pcm.extend_from_slice(samples);
         }
-        n
     }
 
-    /// Encerra a sessão: transcreve a cauda, finaliza e **injeta uma única vez**.
-    /// Retorna o texto injetado (ou `None` se vazio).
+    /// Encerra a sessão: transcreve o **áudio inteiro** de uma vez, aplica
+    /// correções e injeta **uma única vez**. Retorna o texto injetado.
     pub fn stop_and_finish(&mut self) -> Option<String> {
-        if let Ok(Some((id, seg))) = self.pipeline.stop() {
-            let wav = audio::raw_to_wav(
-                &seg.pcm,
-                audio::SAMPLE_RATE,
-                audio::CHANNELS,
-                audio::BITS_PER_SAMPLE,
-            );
-            if let Ok(text) = self.asr.transcribe(&wav, &self.opts) {
-                self.pipeline.accept(id, &text);
-            }
-        }
-        match self.pipeline.finish() {
-            Ok(Some(text)) => {
-                let corrected = self.corrections.apply(&text);
+        let _ = self.pipeline.stop();
+        let text = self.transcribe_full();
+        let _ = self.pipeline.finish();
+        self.full_pcm.clear();
+        match text {
+            Some(t) if !t.trim().is_empty() => {
+                let corrected = self.corrections.apply(&t);
                 if let Err(e) = self.injector.inject(&corrected) {
                     tracing::error!(error = %e, "falha ao injetar texto");
                 }
@@ -131,49 +113,33 @@ impl Engine {
         }
     }
 
-    // ---- API de baixo nível (a captura NUNCA bloqueia em HTTP) ----------------
-
-    /// Segmenta o áudio e devolve os segmentos prontos (PCM), **sem** transcrever.
-    pub fn push_audio_raw(&mut self, samples: &[i16]) -> Vec<(SessionId, Vec<i16>)> {
-        self.pipeline
-            .push_audio(samples)
-            .into_iter()
-            .map(|(id, seg)| (id, seg.pcm))
-            .collect()
-    }
-
-    /// Encerra a captura e devolve a cauda (PCM), sem transcrever.
-    pub fn flush_raw(&mut self) -> Result<Option<(SessionId, Vec<i16>)>, String> {
-        self.pipeline
-            .stop()
-            .map(|o| o.map(|(id, seg)| (id, seg.pcm)))
-            .map_err(|e| e.to_string())
-    }
-
-    /// Aplica um texto transcrito à sessão corrente (descarta se superada).
-    pub fn accept_text(&mut self, id: SessionId, text: &str) -> bool {
-        self.pipeline.accept(id, text)
-    }
-
-    /// Finaliza e devolve o texto (com correções), **sem** injetar.
-    pub fn finish_text(&mut self) -> Result<Option<String>, String> {
-        match self.pipeline.finish() {
-            Ok(Some(text)) => Ok(Some(self.corrections.apply(&text))),
-            Ok(None) => Ok(None),
-            Err(e) => Err(e.to_string()),
+    /// Transcreve todo o áudio da sessão. Em blocos de ~10 min (teto de 25 MB do
+    /// Groq); no caso comum (≤ alguns minutos) é **uma única chamada**.
+    fn transcribe_full(&self) -> Option<String> {
+        let sr = audio::SAMPLE_RATE as usize;
+        let chunk = sr * 600; // 10 min
+        let mut out = String::new();
+        for part in self.full_pcm.chunks(chunk) {
+            if part.len() < sr / 4 {
+                continue; // < 0,25 s
+            }
+            let wav = audio::raw_to_wav(
+                part,
+                audio::SAMPLE_RATE,
+                audio::CHANNELS,
+                audio::BITS_PER_SAMPLE,
+            );
+            if let Ok(t) = self.asr.transcribe(&wav, &self.opts) {
+                let t = t.trim();
+                if !t.is_empty() {
+                    if !out.is_empty() {
+                        out.push(' ');
+                    }
+                    out.push_str(t);
+                }
+            }
         }
-    }
-
-    /// Injeta o texto no app em foco.
-    pub fn inject(&self, text: &str) {
-        if let Err(e) = self.injector.inject(text) {
-            tracing::error!(error = %e, "falha ao injetar texto");
-        }
-    }
-
-    /// Cauda de áudio em formação (para a prévia).
-    pub fn pending_pcm(&self) -> Vec<i16> {
-        self.pipeline.pending_pcm()
+        (!out.is_empty()).then_some(out)
     }
 }
 
@@ -425,25 +391,20 @@ mod tests {
     }
 
     #[test]
-    fn long_audio_transcribes_all_segments_and_injects_once() {
-        // 2.5s de áudio, segmentos de 1s => 2 segmentos + cauda = 3 chamadas
-        let asr = Arc::new(MockAsr::new(vec![
-            Ok("primeira".into()),
-            Ok("segunda".into()),
-            Ok("terceira".into()),
-        ]));
+    fn full_audio_transcribes_once_and_injects_once() {
+        // O áudio inteiro é transcrito numa única chamada ao ASR, no stop.
+        let asr = Arc::new(MockAsr::new(vec![Ok("texto completo coerente".into())]));
         let inj = Arc::new(MockInjector::new());
         let mut engine = Engine::new(&cfg(), asr.clone(), inj.clone());
         engine.start().unwrap();
 
-        let samples = vec![0i16; (audio::SAMPLE_RATE as usize * 5) / 2]; // 2,5s
-        let n = engine.push_audio(&samples);
-        assert_eq!(n, 2, "dois segmentos de 1s");
+        let samples = vec![0i16; audio::SAMPLE_RATE as usize * 3]; // 3s
+        engine.push_audio(&samples);
 
         let text = engine.stop_and_finish().unwrap();
-        assert_eq!(text, "primeira segunda terceira");
-        assert_eq!(inj.count(), 1, "injeção deve ocorrer exatamente uma vez");
-        assert_eq!(asr.calls().len(), 3);
+        assert_eq!(text, "texto completo coerente");
+        assert_eq!(inj.count(), 1, "injeção exatamente uma vez");
+        assert_eq!(asr.calls().len(), 1, "uma única chamada ao ASR");
     }
 
     #[test]
@@ -478,16 +439,16 @@ mod tests {
     }
 
     #[test]
-    fn pending_wav_only_after_half_second() {
+    fn preview_wav_needs_one_second() {
         let asr = Arc::new(MockAsr::new(vec![]));
         let inj = Arc::new(MockInjector::new());
         let mut engine = Engine::new(&cfg(), asr, inj);
         engine.start().unwrap();
         engine.push_audio(&[0i16; 100]); // pouca coisa
-        assert!(engine.pending_wav().is_none());
-        let half = [0i16; (audio::SAMPLE_RATE as usize) / 2 + 1];
-        engine.push_audio(&half);
-        assert!(engine.pending_wav().is_some());
+        assert!(engine.preview_wav().is_none());
+        let one_sec = [0i16; audio::SAMPLE_RATE as usize];
+        engine.push_audio(&one_sec);
+        assert!(engine.preview_wav().is_some());
     }
 
     #[test]
