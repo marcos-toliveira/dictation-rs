@@ -20,12 +20,13 @@ if (-not $SkipBuild) {
     }
 }
 
-$releaseDir = Join-Path $PSScriptRoot "target\release"
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+$releaseDir = Join-Path $ScriptDir "target\release"
 $cliExe = Join-Path $releaseDir "dictation.exe"
 $daemonExe = Join-Path $releaseDir "dictationd.exe"
 
 if (-not (Test-Path $cliExe) -or -not (Test-Path $daemonExe)) {
-    Write-Error "Binários não encontrados em $releaseDir. Execute sem -SkipBuild primeiro."
+    Write-Error "Binários não encontrados em $releaseDir. Execute sem -SkipBuild primeiro para compilar."
     exit 1
 }
 
@@ -49,36 +50,75 @@ if ($userPath -notlike "*$InstallDir*") {
     Write-Host "    [OK] Diretório já está no PATH." -ForegroundColor Green
 }
 
-# 4. Criar diretórios de configuração e arquivos de modelo se não existirem
+# 4. Criar diretórios de configuração e arquivos de modelo (schema idêntico ao config.ini.example)
 $configDir = Join-Path $env:APPDATA "dictation"
 if (-not (Test-Path $configDir)) {
     New-Item -ItemType Directory -Path $configDir -Force | Out-Null
 }
 
 $configFile = Join-Path $configDir "config.ini"
-if (-not (Test-Path $configFile)) {
-    Write-Host "==> Criando modelo de config em $configFile..." -ForegroundColor Yellow
+$needsConfigUpdate = (-not (Test-Path $configFile))
+if (Test-Path $configFile) {
+    $existing = Get-Content -Path $configFile -Raw -ErrorAction SilentlyContinue
+    if ($existing -like "*[general]*") {
+        # Corrige configuração anterior com seções inválidas
+        $needsConfigUpdate = $true
+    }
+}
+
+if ($needsConfigUpdate) {
+    Write-Host "==> Gerando $configFile com o schema oficial [dictation]/[paths]/[local]..." -ForegroundColor Yellow
     @'
-[general]
+; ==============================================================================
+; config.ini — ditado por voz (dictation-rs)
+; ==============================================================================
+[dictation]
 provider = groq
 language = pt
 model = whisper-large-v3
-device = default
+device =
 capture = cpal
-max_seconds = 600
+max_seconds = 180
 inject = type
-
-[ui]
+type_delay_ms = 6
+trailing_space = true
+notify = true
 indicator = true
-indicator_anchor = top-center
+indicator_anchor = bottom-right
 preview = false
-preview_interval_ms = 500
+preview_interval_ms = 1500
+preview_anchor = bottom-center
+segment_seconds = 10.0
+overlap_seconds = 0.5
+min_segment_seconds = 0.3
 
 [paths]
-history_dir = %LOCALAPPDATA%\dictation\history
-corrections_file = %APPDATA%\dictation\corrections.tsv
+vault = %APPDATA%\anubis\groq.env
+vocab = %APPDATA%\dictation\vocab.txt
+corrections = %APPDATA%\dictation\corrections.tsv
+state_dir = %LOCALAPPDATA%\dictation
+
+[local]
+whisper_bin =
+model =
+threads = 4
 '@ | Set-Content -Path $configFile -Encoding utf8
-    Write-Host "    [OK] Criado $configFile" -ForegroundColor Green
+    Write-Host "    [OK] Configurado $configFile" -ForegroundColor Green
+}
+
+# Copiar vocabulário e correções de exemplo se não existirem
+$vocabDst = Join-Path $configDir "vocab.txt"
+$vocabSrc = Join-Path $ScriptDir "vocab.txt.example"
+if (-not (Test-Path $vocabDst) -and (Test-Path $vocabSrc)) {
+    Copy-Item -Path $vocabSrc -Destination $vocabDst
+    Write-Host "    [OK] Criado $vocabDst" -ForegroundColor Green
+}
+
+$correctionsDst = Join-Path $configDir "corrections.tsv"
+$correctionsSrc = Join-Path $ScriptDir "corrections.tsv.example"
+if (-not (Test-Path $correctionsDst) -and (Test-Path $correctionsSrc)) {
+    Copy-Item -Path $correctionsSrc -Destination $correctionsDst
+    Write-Host "    [OK] Criado $correctionsDst" -ForegroundColor Green
 }
 
 # 5. Criar diretório do cofre da chave Groq
