@@ -12,7 +12,7 @@ use dictation_groq::GroqEngine;
 use dictation_platform::capture::CpalCapture;
 #[cfg(target_os = "linux")]
 use dictation_platform::capture::FfmpegCapture;
-use dictation_platform::inject::{StdoutInjector, XdotoolInjector};
+use dictation_platform::inject::{ClipboardInjector, StdoutInjector, XdotoolInjector};
 use dictation_platform::{AudioCapture, TextInjector};
 use dictation_ui::state::{self, SharedUi};
 use dictation_ui::tray::{spawn_tray, TrayAction, TrayHandle};
@@ -331,7 +331,14 @@ fn main() {
     let asr = build_asr(&cfg);
     let injector: Arc<dyn TextInjector> = match cfg.inject {
         InjectMode::Stdout => Arc::new(StdoutInjector),
-        _ => Arc::new(XdotoolInjector::new().with_delay_ms(cfg.type_delay_ms)),
+        InjectMode::Clipboard => {
+            Arc::new(ClipboardInjector::new().with_trailing_space(cfg.trailing_space))
+        }
+        InjectMode::Type => Arc::new(
+            XdotoolInjector::new()
+                .with_delay_ms(cfg.type_delay_ms)
+                .with_trailing_space(cfg.trailing_space),
+        ),
     };
     let engine = Arc::new(Mutex::new(Engine::new(&cfg, Arc::clone(&asr), injector)));
     let opts = engine.lock().unwrap().options();

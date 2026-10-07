@@ -1,0 +1,79 @@
+# Maintainer: marcos-toliveira <marcostuliocdo.work@gmail.com>
+pkgname=dictation-rs
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Ditado por voz push-to-talk para Linux/X11 com ASR no Groq (reescrita em Rust)"
+arch=('x86_64')
+url="https://github.com/marcos-toliveira/dictation-rs"
+license=('MIT')
+depends=(
+  'gcc-libs'
+  'alsa-lib'
+  'libglvnd'
+  'libx11'
+  'libxcursor'
+  'libxi'
+  'libxrandr'
+  'libxcb'
+  'libxkbcommon'
+  'wayland'
+  'ffmpeg'
+  'xdotool'
+  'xorg-xrandr'
+  'libnotify'
+  'xdg-utils'
+  'util-linux'
+)
+optdepends=(
+  'zenity: diálogo para ensinar correção (genérico)'
+  'kdialog: diálogo para ensinar correção (KDE)'
+  'xclip: preencher o campo "Errado" do "ensinar correção" com a seleção'
+  'libpulse: ferramenta pactl para detectar a fonte de áudio padrão'
+  'whisper.cpp: transcrição offline (fallback sem rede)'
+)
+makedepends=('cargo' 'rust' 'pkgconf' 'alsa-lib')
+provides=('dictation')
+conflicts=('dictation')
+install="$pkgname.install"
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('88819665307775c31dd8a556a83c5426c9aa8b8c0061bbb967db34169b834452')
+
+build() {
+  cd "$pkgname-$pkgver"
+  # Usa o toolchain do sistema (ignora rustup/rust-toolchain.toml)
+  rm -f rust-toolchain.toml
+  cargo build --release --workspace --locked
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+
+  install -Dm755 target/release/dictationd "$pkgdir/usr/bin/dictationd"
+  install -Dm755 target/release/dictation  "$pkgdir/usr/bin/dictation"
+
+  install -Dm644 LICENSE   "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+
+  install -d "$pkgdir/usr/share/$pkgname"
+  install -m644 config.ini.example corrections.tsv.example vocab.txt.example \
+    "$pkgdir/usr/share/$pkgname/"
+  install -m755 set-shortcut.sh "$pkgdir/usr/share/$pkgname/set-shortcut.sh"
+
+  # Serviço de usuário (sobe na sessão gráfica)
+  install -d "$pkgdir/usr/lib/systemd/user"
+  cat > "$pkgdir/usr/lib/systemd/user/dictationd.service" <<'EOF'
+[Unit]
+Description=Dictation daemon (push-to-talk)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/dictationd
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
+EOF
+}

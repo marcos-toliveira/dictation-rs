@@ -518,7 +518,7 @@ checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
 
 [[package]]
 name = "dictation-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dictation-core",
  "dictation-groq",
@@ -527,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "dictation-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "serde",
@@ -538,7 +538,7 @@ dependencies = [
 
 [[package]]
 name = "dictation-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dictation-core",
  "dictation-groq",
@@ -551,7 +551,7 @@ dependencies = [
 
 [[package]]
 name = "dictation-groq"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dictation-core",
  "serde_json",
@@ -562,7 +562,7 @@ dependencies = [
 
 [[package]]
 name = "dictation-platform"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cpal",
  "dictation-core",
@@ -572,7 +572,7 @@ dependencies = [
 
 [[package]]
 name = "dictation-ui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dictation-core",
  "eframe",

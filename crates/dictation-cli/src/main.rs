@@ -8,7 +8,7 @@
 
 use dictation_core::{AsrEngine, AsrOptions, Config, InjectMode};
 use dictation_groq::GroqEngine;
-use dictation_platform::inject::{StdoutInjector, XdotoolInjector};
+use dictation_platform::inject::{ClipboardInjector, StdoutInjector, XdotoolInjector};
 use dictation_platform::TextInjector;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -112,7 +112,14 @@ fn transcribe(cfg: &Config, args: &[String]) {
     };
     let injector: Box<dyn TextInjector> = match cfg.inject {
         InjectMode::Stdout => Box::new(StdoutInjector),
-        _ => Box::new(XdotoolInjector::new().with_delay_ms(cfg.type_delay_ms)),
+        InjectMode::Clipboard => {
+            Box::new(ClipboardInjector::new().with_trailing_space(cfg.trailing_space))
+        }
+        InjectMode::Type => Box::new(
+            XdotoolInjector::new()
+                .with_delay_ms(cfg.type_delay_ms)
+                .with_trailing_space(cfg.trailing_space),
+        ),
     };
     let _ = injector.inject(&text);
 }

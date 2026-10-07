@@ -1,0 +1,32 @@
+post_install() {
+  cat <<'EOF'
+==> dictation-rs instalado.
+
+Próximos passos (por usuário):
+
+  1) Chave do Groq no cofre 0600 (~/.config/anubis/groq.env):
+       install -d -m700 ~/.config/anubis
+       printf 'GROQ_API_KEY=gsk_SUA_CHAVE\n' > ~/.config/anubis/groq.env
+       chmod 600 ~/.config/anubis/groq.env
+
+  2) Config (opcional; sem ela, usa padrões):
+       install -d ~/.config/dictation
+       cp /usr/share/dictation-rs/config.ini.example      ~/.config/dictation/config.ini
+       cp /usr/share/dictation-rs/corrections.tsv.example ~/.config/dictation/corrections.tsv
+       cp /usr/share/dictation-rs/vocab.txt.example       ~/.config/dictation/vocab.txt
+
+  3) Daemon (serviço de usuário, sobe com a sessão gráfica):
+       systemctl --user daemon-reload
+       systemctl --user enable --now dictationd.service
+
+  4) Atalho global (KDE Plasma 6): bash /usr/share/dictation-rs/set-shortcut.sh F8 F9
+
+  5) Teste:  dictation start ; fale ; dictation stop
+
+Observação: captura via ffmpeg (fonte PulseAudio/PipeWire). Injeta com xdotool.
+EOF
+}
+
+post_upgrade() {
+  post_install
+}
