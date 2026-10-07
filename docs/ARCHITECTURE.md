@@ -40,21 +40,28 @@ Isso torna o custo linear e o texto monotônico.
 > v1 usa janelas fixas com pequena sobreposição. VAD (corte por silêncio) é uma melhoria
 > futura para evitar corte no meio de palavra; a interface já está isolada para permitir isso.
 
-## Portas abertas: Wayland e Windows
-Cada capacidade é um trait, com `feature = "x11" | "wayland" | "windows"`:
+## Suporte a Plataformas: Linux e Windows Nativo
+Cada capacidade é isolada em traits ou abstrações condicionais (`#[cfg(target_os = ...)]`):
 
-- **Áudio** (`AudioCapture`): `cpal` cobre Linux (ALSA/PulseAudio — funciona também no
-  Wayland) e Windows (WASAPI). É **independente do display server**.
-- **Injeção de texto** (`TextInjector`): X11 = XTest (`x11rb`); Wayland = `wtype`/libei
-  (futuro); Windows = `SendInput` (futuro).
-- **Atalho global** (`HotkeyProvider`): X11 = `XGrabKey`; Wayland = KGlobalAccel/portal
-  (futuro); Windows = `RegisterHotKey` (futuro).
-- **Overlay** (`OverlayHost`): X11 = janela click-through via input shape; Wayland =
-  `wl_surface.set_input_region` (futuro); Windows = janela em camadas `WS_EX_TRANSPARENT` (futuro).
-- **Bandeja** (`TrayHost`): crate `tray-icon` (SNI no Linux, `Shell_NotifyIcon` no Windows).
-
-O primeiro alvo é **Linux/X11**; Wayland e Windows ficam como backends a implementar nas
-máquinas correspondentes, sem tocar no core.
+- **Áudio** (`AudioCapture`): `cpal` cobre Linux (ALSA/PulseAudio/JACK) e Windows (WASAPI nativo). No Windows, o padrão é `capture = "cpal"`.
+- **Injeção de texto** (`TextInjector`):
+  - Linux/X11: `xdotool` com `key Uxxxx` ou `xclip` + Ctrl+V.
+  - Windows: `SendInput` com `KEYEVENTF_UNICODE` (`WindowsTypeInjector` — sem dependência de layout de teclado ou dead keys) ou `arboard` + Ctrl+V (`WindowsClipboardInjector`).
+- **Atalho global**:
+  - Linux: KGlobalAccel via scripts de integração.
+  - Windows: thread dedicada rodando loop de mensagens Win32 com `RegisterHotKey` (F8 para toggle de gravação e F9 para ensinar correção).
+- **Overlay**:
+  - Linux/X11: `override_redirect` + `X11WindowType::Tooltip` + `mouse_passthrough`.
+  - Windows: janela Win32 sem foco e click-through via `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE`, posicionada sobre a janela em foco detectada via `GetForegroundWindow` e `GetWindowRect`.
+- **Bandeja**:
+  - Linux: `ksni` (D-Bus StatusNotifierItem).
+  - Windows: `Shell_NotifyIconW` nativo com menu popup Win32 e suporte a `WM_COMMAND`.
+- **IPC CLI ↔ Daemon**:
+  - Linux: Unix domain socket (`/tmp/dictation.sock` ou `~/.local/state/dictation/socket`).
+  - Windows: Windows Named Pipe (`\\.\pipe\dictation`).
+- **Caminhos de Configuração**:
+  - Linux: `~/.config/dictation/config.ini`, cofre `~/.config/anubis/groq.env`.
+  - Windows: `%APPDATA%\dictation\config.ini`, `%APPDATA%\anubis\groq.env` (ou variável `GROQ_API_KEY`).
 
 ## Testes e qualidade
 - unit + **property-based** (`proptest`) para invariantes (máquina de estados, segmentação);

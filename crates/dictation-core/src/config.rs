@@ -58,12 +58,37 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
+        #[cfg(windows)]
+        let (vault, corrections, vocab, state_dir, capture) = {
+            let appdata = std::env::var_os("APPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| expand("~/.config"));
+            let localappdata = std::env::var_os("LOCALAPPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| appdata.clone());
+            (
+                appdata.join("anubis").join("groq.env"),
+                appdata.join("dictation").join("corrections.tsv"),
+                appdata.join("dictation").join("vocab.txt"),
+                localappdata.join("dictation").join("state"),
+                "cpal".to_string(),
+            )
+        };
+        #[cfg(not(windows))]
+        let (vault, corrections, vocab, state_dir, capture) = (
+            expand("~/.config/anubis/groq.env"),
+            expand("~/.config/dictation/corrections.tsv"),
+            expand("~/.config/dictation/vocab.txt"),
+            expand("~/.local/state/dictation"),
+            String::new(),
+        );
+
         Self {
             provider: Provider::Groq,
             language: "pt".into(),
             model: "whisper-large-v3".into(),
             device: None,
-            capture: String::new(),
+            capture,
             max_seconds: 180,
             inject: InjectMode::Type,
             type_delay_ms: 6,
@@ -77,10 +102,10 @@ impl Default for Config {
             segment_seconds: 10.0,
             overlap_seconds: 0.5,
             min_segment_seconds: 0.3,
-            vault: expand("~/.config/anubis/groq.env"),
-            corrections: expand("~/.config/dictation/corrections.tsv"),
-            vocab: expand("~/.config/dictation/vocab.txt"),
-            state_dir: expand("~/.local/state/dictation"),
+            vault,
+            corrections,
+            vocab,
+            state_dir,
             socket: None,
             whisper_bin: expand("~/.local/bin/whisper-cli"),
             whisper_model: expand("~/.local/share/whisper.cpp/models/ggml-small.bin"),
@@ -105,12 +130,26 @@ impl Config {
         if let Ok(p) = std::env::var("DICTATION_CONFIG") {
             return PathBuf::from(p);
         }
-        let base = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
-            });
-        base.join("dictation").join("config.ini")
+        #[cfg(windows)]
+        {
+            let base = std::env::var_os("APPDATA")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::env::var_os("USERPROFILE")
+                        .map(|p| PathBuf::from(p).join(".config"))
+                        .unwrap_or_default()
+                });
+            base.join("dictation").join("config.ini")
+        }
+        #[cfg(not(windows))]
+        {
+            let base = std::env::var_os("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config")
+                });
+            base.join("dictation").join("config.ini")
+        }
     }
 
     /// Parseia TOML (formato nativo do rewrite).
@@ -246,16 +285,24 @@ fn parse_bool(v: &str) -> bool {
 }
 
 fn default_socket() -> PathBuf {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
-    base.join("dictation.sock")
+    #[cfg(windows)]
+    {
+        PathBuf::from(r"\\.\pipe\dictation")
+    }
+    #[cfg(not(windows))]
+    {
+        let base = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
+        base.join("dictation.sock")
+    }
 }
 
-/// Expande um `~` inicial para `$HOME`.
+/// Expande um `~` inicial para `$HOME` (ou `$USERPROFILE` no Windows).
 fn expand(p: &str) -> PathBuf {
-    if let Some(rest) = p.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
+    if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+        if let Some(home) = home {
             return PathBuf::from(home).join(rest);
         }
     }
@@ -336,6 +383,7 @@ threads = 4
         assert!(c
             .state_dir
             .to_string_lossy()
+            .replace('\\', "/")
             .ends_with(".local/state/dictation"));
     }
 
@@ -352,6 +400,7 @@ threads = 4
         assert!(c
             .vault
             .to_string_lossy()
+            .replace('\\', "/")
             .ends_with(".config/anubis/groq.env"));
     }
 }

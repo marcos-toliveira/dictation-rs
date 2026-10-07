@@ -1,10 +1,10 @@
 //! `dictationd` — daemon do dictation-rs com GUI.
 //!
-//! Thread principal: overlay (egui/eframe). Threads: socket local, captura (`cpal`),
-//! prévia ao vivo (Groq) e bandeja (`ksni`).
+//! Thread principal: overlay (egui/eframe). Threads: socket local / named pipe, captura (`cpal`),
+//! prévia ao vivo (Groq) e bandeja (Linux: `ksni` / Windows: `Shell_NotifyIconW`).
 //!
 //! Comandos do socket (uma linha): `start | stop | toggle | status | teach <e> <c> [--vocab] | last | quit`.
-//! Config: `~/.config/dictation/config.ini` (o mesmo do Python) ou `$DICTATION_CONFIG`.
+//! Config: `~/.config/dictation/config.ini` ou `%APPDATA%\dictation\config.ini` ou `$DICTATION_CONFIG`.
 
 use dictation_core::{AsrEngine, AsrOptions, Config, InjectMode, Provider};
 use dictation_daemon::{read_last, save_last, teach, Engine, FallbackAsr, LocalWhisper, RetryAsr};
@@ -12,11 +12,12 @@ use dictation_groq::GroqEngine;
 use dictation_platform::capture::CpalCapture;
 #[cfg(target_os = "linux")]
 use dictation_platform::capture::FfmpegCapture;
-use dictation_platform::inject::{ClipboardInjector, StdoutInjector, XdotoolInjector};
+use dictation_platform::inject::{PlatformClipboardInjector, PlatformTypeInjector, StdoutInjector};
 use dictation_platform::{AudioCapture, TextInjector};
 use dictation_ui::state::{self, SharedUi};
 use dictation_ui::tray::{spawn_tray, TrayAction, TrayHandle};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(not(windows))]
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::process::Command;
@@ -208,10 +209,10 @@ fn build_asr(cfg: &Config) -> Arc<dyn AsrEngine> {
 
 /// Escolhe o backend de captura. No Linux, prefere `ffmpeg` (robusto); `cpal` fica
 /// para o Windows e como opção (`capture = cpal`).
-fn build_capture(mode: &str, device: Option<String>) -> Box<dyn AudioCapture> {
+fn build_capture(_mode: &str, device: Option<String>) -> Box<dyn AudioCapture> {
     #[cfg(target_os = "linux")]
     {
-        let use_ffmpeg = match mode {
+        let use_ffmpeg = match _mode {
             "ffmpeg" => true,
             "cpal" => false,
             _ => which("ffmpeg"),
@@ -232,24 +233,40 @@ fn build_capture(mode: &str, device: Option<String>) -> Box<dyn AudioCapture> {
 }
 
 fn notify(cfg: &Config, title: &str, body: &str) {
+    #[cfg(target_os = "linux")]
     if cfg.notify && which("notify-send") {
         let _ = Command::new("notify-send")
             .args(["-a", "dictation", title, body])
             .status();
     }
+    #[cfg(windows)]
+    if cfg.notify {
+        tracing::info!(title = %title, body = %body, "notificação");
+    }
 }
 
+#[allow(dead_code)]
 fn which(prog: &str) -> bool {
     std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).any(|d| d.join(prog).is_file()))
+        .map(|p| {
+            std::env::split_paths(&p).any(|d| {
+                d.join(prog).is_file() || (cfg!(windows) && d.join(format!("{prog}.exe")).is_file())
+            })
+        })
         .unwrap_or(false)
 }
 
 fn open(path: &std::path::Path) {
+    #[cfg(target_os = "linux")]
     let _ = Command::new("xdg-open").arg(path).status();
+    #[cfg(windows)]
+    let _ = Command::new("cmd")
+        .args(["/c", "start", "", &path.to_string_lossy()])
+        .status();
 }
 
 /// Texto selecionado (primary/clipboard) — preenche o campo "Errado".
+#[cfg(target_os = "linux")]
 fn selection() -> Option<String> {
     for sel in ["primary", "clipboard"] {
         if let Ok(o) = Command::new("xclip")
@@ -267,7 +284,17 @@ fn selection() -> Option<String> {
     None
 }
 
-/// Pede uma entrada de texto (zenity ou kdialog).
+#[cfg(windows)]
+fn selection() -> Option<String> {
+    arboard::Clipboard::new()
+        .ok()
+        .and_then(|mut c| c.get_text().ok())
+        .map(|s| s.trim().chars().take(200).collect())
+        .filter(|s: &String| !s.is_empty())
+}
+
+/// Pede uma entrada de texto (zenity ou kdialog no Linux; PowerShell no Windows).
+#[cfg(target_os = "linux")]
 fn ask(title: &str, text: &str, default: &str) -> Option<String> {
     let out = if which("zenity") {
         Command::new("zenity")
@@ -294,6 +321,29 @@ fn ask(title: &str, text: &str, default: &str) -> Option<String> {
         return None;
     }
     Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[cfg(windows)]
+fn ask(title: &str, text: &str, default: &str) -> Option<String> {
+    let script = format!(
+        "[void][System.Reflection.Assembly]::LoadWithPartialName('Microsoft.VisualBasic'); $res = [Microsoft.VisualBasic.Interaction]::InputBox('{}', '{}', '{}'); if ($res) {{ Write-Output $res }}",
+        text.replace('\'', "''"),
+        title.replace('\'', "''"),
+        default.replace('\'', "''")
+    );
+    let out = Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Diálogo de ensinar correção (F9): preenche "Errado" com a seleção e salva.
@@ -337,10 +387,10 @@ fn main() {
     let injector: Arc<dyn TextInjector> = match cfg.inject {
         InjectMode::Stdout => Arc::new(StdoutInjector),
         InjectMode::Clipboard => {
-            Arc::new(ClipboardInjector::new().with_trailing_space(cfg.trailing_space))
+            Arc::new(PlatformClipboardInjector::new().with_trailing_space(cfg.trailing_space))
         }
         InjectMode::Type => Arc::new(
-            XdotoolInjector::new()
+            PlatformTypeInjector::new()
                 .with_delay_ms(cfg.type_delay_ms)
                 .with_trailing_space(cfg.trailing_space),
         ),
@@ -361,7 +411,7 @@ fn main() {
         tray: None,
     }));
 
-    // Bandeja (ksni) + dispatcher de ações.
+    // Bandeja + dispatcher de ações.
     let (tx, rx) = mpsc::channel::<TrayAction>();
     match spawn_tray(tx) {
         Ok(handle) => daemon.lock().unwrap().tray = Some(handle),
@@ -387,11 +437,18 @@ fn main() {
         });
     }
 
-    // Socket local.
+    // Socket local / named pipe.
     let sock = cfg.socket_path();
     {
         let d = Arc::clone(&daemon);
         std::thread::spawn(move || run_socket(d, sock));
+    }
+
+    // No Windows: atalhos globais nativos (F8 toggle / F9 teach) via RegisterHotKey.
+    #[cfg(windows)]
+    {
+        let d = Arc::clone(&daemon);
+        std::thread::spawn(move || run_global_hotkeys(d));
     }
 
     // Prévia ao vivo.
@@ -425,6 +482,7 @@ fn main() {
     let _ = dictation_ui::run_overlay(ui, cfg.indicator_anchor.clone(), cfg.preview_anchor.clone());
 }
 
+#[cfg(not(windows))]
 fn run_socket(daemon: Arc<Mutex<Daemon>>, sock: PathBuf) {
     let _ = std::fs::remove_file(&sock);
     let listener = match UnixListener::bind(&sock) {
@@ -445,6 +503,95 @@ fn run_socket(daemon: Arc<Mutex<Daemon>>, sock: PathBuf) {
             let mut s = stream;
             let _ = s.write_all(format!("{reply}\n").as_bytes());
             let _ = s.flush();
+        }
+    }
+}
+
+#[cfg(windows)]
+fn run_socket(daemon: Arc<Mutex<Daemon>>, pipe_path: PathBuf) {
+    use std::os::windows::io::FromRawHandle;
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::{GetLastError, ERROR_PIPE_CONNECTED, INVALID_HANDLE_VALUE};
+    use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
+    use windows::Win32::System::Pipes::{
+        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE,
+        PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    };
+
+    let pipe_name = pipe_path.to_string_lossy();
+    let wide_name = HSTRING::from(pipe_name.as_ref());
+    tracing::info!(pipe = %pipe_name, "dictationd ouvindo via named pipe");
+
+    unsafe {
+        loop {
+            let handle = CreateNamedPipeW(
+                &wide_name,
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                PIPE_UNLIMITED_INSTANCES,
+                4096,
+                4096,
+                0,
+                None,
+            );
+
+            if handle == INVALID_HANDLE_VALUE {
+                tracing::error!(error = ?GetLastError(), "falha ao criar named pipe");
+                std::thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+
+            let connected =
+                ConnectNamedPipe(handle, None).is_ok() || GetLastError() == ERROR_PIPE_CONNECTED;
+
+            if connected {
+                let d = Arc::clone(&daemon);
+                let mut file = std::fs::File::from_raw_handle(handle.0 as *mut std::ffi::c_void);
+                let mut line = String::new();
+                if BufReader::new(&file).read_line(&mut line).is_ok() {
+                    let reply = d.lock().unwrap().handle(line.trim());
+                    let _ = file.write_all(format!("{reply}\n").as_bytes());
+                    let _ = file.flush();
+                }
+                let _ = DisconnectNamedPipe(handle);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn run_global_hotkeys(daemon: Arc<Mutex<Daemon>>) {
+    use windows::Win32::Foundation::{HWND, WPARAM};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, MOD_NOREPEAT, VK_F8, VK_F9};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, GetMessageW, TranslateMessage, MSG, WM_HOTKEY,
+    };
+
+    unsafe {
+        let ok1 = RegisterHotKey(HWND(0), 1, MOD_NOREPEAT, VK_F8.0 as u32).is_ok();
+        let ok2 = RegisterHotKey(HWND(0), 2, MOD_NOREPEAT, VK_F9.0 as u32).is_ok();
+        if ok1 {
+            tracing::info!("Atalho global F8 registrado (ditar/toggle)");
+        } else {
+            tracing::warn!("Não foi possível registrar atalho global F8");
+        }
+        if ok2 {
+            tracing::info!("Atalho global F9 registrado (ensinar/teach)");
+        } else {
+            tracing::warn!("Não foi possível registrar atalho global F9");
+        }
+
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, HWND(0), 0, 0).as_bool() {
+            if msg.message == WM_HOTKEY {
+                if msg.wParam == WPARAM(1) {
+                    daemon.lock().unwrap().handle("toggle");
+                } else if msg.wParam == WPARAM(2) {
+                    let _ = daemon.lock().unwrap().handle("teach");
+                }
+            }
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
         }
     }
 }

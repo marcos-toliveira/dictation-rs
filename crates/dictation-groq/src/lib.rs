@@ -37,10 +37,39 @@ impl GroqEngine {
         self
     }
 
-    /// Lê `GROQ_API_KEY` (e `GROQ_MODEL`) de um cofre `KEY=VALUE` (ex.: `~/.config/anubis/groq.env`).
+    /// Lê `GROQ_API_KEY` (e `GROQ_MODEL`) do ambiente ou de um cofre `KEY=VALUE` (ex.: `~/.config/anubis/groq.env`).
     pub fn from_vault(path: &Path) -> Result<Self, AsrError> {
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| AsrError::Network(format!("vault {}: {e}", path.display())))?;
+        if let Ok(key) = std::env::var("GROQ_API_KEY") {
+            let key = key.trim().to_string();
+            if !key.is_empty() {
+                return Ok(Self::new(key));
+            }
+        }
+        let text = if path.is_file() {
+            std::fs::read_to_string(path)
+                .map_err(|e| AsrError::Network(format!("vault {}: {e}", path.display())))?
+        } else {
+            let alt1 = std::env::var_os("USERPROFILE").map(|p| {
+                std::path::PathBuf::from(p)
+                    .join(".config")
+                    .join("anubis")
+                    .join("groq.env")
+            });
+            let alt2 = std::env::var_os("APPDATA")
+                .map(|p| std::path::PathBuf::from(p).join("anubis").join("groq.env"));
+            let text_opt = alt1
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .or_else(|| alt2.and_then(|p| std::fs::read_to_string(p).ok()));
+            match text_opt {
+                Some(t) => t,
+                None => {
+                    return Err(AsrError::Network(format!(
+                        "vault {} não encontrado (defina GROQ_API_KEY ou configure groq.env)",
+                        path.display()
+                    )));
+                }
+            }
+        };
         let key = parse_vault_key(&text).ok_or_else(|| {
             AsrError::Network(format!("GROQ_API_KEY ausente em {}", path.display()))
         })?;

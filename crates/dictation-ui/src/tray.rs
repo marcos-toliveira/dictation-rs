@@ -4,7 +4,9 @@
 //! Ícone: microfone (ocioso) / media-record (gravando). Menu: iniciar/parar, ensinar,
 //! editar correções/vocabulário, sair. Clique esquerdo alterna a gravação.
 
+#[cfg(target_os = "linux")]
 use ksni::menu::StandardItem;
+#[cfg(target_os = "linux")]
 use ksni::{MenuItem, ToolTip, Tray};
 use std::sync::mpsc::Sender;
 
@@ -24,6 +26,7 @@ pub struct DictationTray {
     pub tx: Sender<TrayAction>,
 }
 
+#[cfg(target_os = "linux")]
 fn item(label: &str, action: TrayAction, tx: &Sender<TrayAction>) -> MenuItem<DictationTray> {
     let tx = tx.clone();
     StandardItem {
@@ -36,6 +39,7 @@ fn item(label: &str, action: TrayAction, tx: &Sender<TrayAction>) -> MenuItem<Di
     .into()
 }
 
+#[cfg(target_os = "linux")]
 impl Tray for DictationTray {
     fn id(&self) -> String {
         "dictation".into()
@@ -86,7 +90,8 @@ impl Tray for DictationTray {
     }
 }
 
-/// Sobe a bandeja em background. Retorna o handle (para atualizar o ícone/estado).
+/// Sobe a bandeja em background no Linux (ksni).
+#[cfg(target_os = "linux")]
 pub fn spawn_tray(
     tx: Sender<TrayAction>,
 ) -> Result<ksni::blocking::Handle<DictationTray>, ksni::Error> {
@@ -99,5 +104,199 @@ pub fn spawn_tray(
     .spawn()
 }
 
-/// Handle da bandeja (re-export amigável para quem não depende de `ksni` diretamente).
+#[cfg(target_os = "linux")]
 pub type TrayHandle = ksni::blocking::Handle<DictationTray>;
+
+#[cfg(windows)]
+pub struct TrayHandle {
+    tx_state: std::sync::mpsc::Sender<bool>,
+}
+
+#[cfg(windows)]
+impl TrayHandle {
+    pub fn update<F>(&self, f: F) -> Result<(), String>
+    where
+        F: FnOnce(&mut DictationTray),
+    {
+        let mut dummy = DictationTray {
+            recording: false,
+            tx: std::sync::mpsc::channel().0,
+        };
+        f(&mut dummy);
+        self.tx_state
+            .send(dummy.recording)
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Sobe a bandeja em background no Windows (Shell_NotifyIconW).
+#[cfg(windows)]
+pub fn spawn_tray(tx: Sender<TrayAction>) -> Result<TrayHandle, String> {
+    use std::sync::mpsc;
+    use windows::core::w;
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+    use windows::Win32::UI::Shell::{
+        Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+        NOTIFYICONDATAW,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
+        DispatchMessageW, GetCursorPos, LoadIconW, PeekMessageW, PostQuitMessage, RegisterClassW,
+        SetForegroundWindow, TrackPopupMenu, TranslateMessage, IDI_APPLICATION, MF_SEPARATOR,
+        MF_STRING, PM_REMOVE, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE,
+        WINDOW_STYLE, WM_APP, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW,
+    };
+
+    let (tx_state, rx_state) = mpsc::channel::<bool>();
+
+    std::thread::spawn(move || unsafe {
+        const WM_TRAY_CALLBACK: u32 = WM_APP + 10;
+
+        unsafe extern "system" fn window_proc(
+            hwnd: HWND,
+            msg: u32,
+            wparam: WPARAM,
+            lparam: LPARAM,
+        ) -> LRESULT {
+            if msg == WM_DESTROY {
+                PostQuitMessage(0);
+                return LRESULT(0);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+
+        let class_name = w!("DictationTrayMsgWindow");
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(window_proc),
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+        let _ = RegisterClassW(&wc);
+
+        let hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            class_name,
+            w!("DictationTray"),
+            WINDOW_STYLE(0),
+            0,
+            0,
+            0,
+            0,
+            HWND(0),
+            None,
+            None,
+            None,
+        );
+
+        let icon = LoadIconW(None, IDI_APPLICATION).unwrap_or_default();
+
+        fn to_sz_tip(s: &str) -> [u16; 128] {
+            let mut buf = [0u16; 128];
+            let wide: Vec<u16> = s.encode_utf16().collect();
+            let len = wide.len().min(127);
+            buf[..len].copy_from_slice(&wide[..len]);
+            buf
+        }
+
+        let mut nid = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hwnd,
+            uID: 1001,
+            uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
+            uCallbackMessage: WM_TRAY_CALLBACK,
+            hIcon: icon,
+            szTip: to_sz_tip("Dictation - ocioso (F8)"),
+            ..Default::default()
+        };
+
+        Shell_NotifyIconW(NIM_ADD, &nid);
+
+        let mut msg = windows::Win32::UI::WindowsAndMessaging::MSG::default();
+        loop {
+            while let Ok(recording) = rx_state.try_recv() {
+                let tip_text = if recording {
+                    "Dictation - GRAVANDO (F8)"
+                } else {
+                    "Dictation - ocioso (F8)"
+                };
+                nid.szTip = to_sz_tip(tip_text);
+                Shell_NotifyIconW(NIM_MODIFY, &nid);
+            }
+
+            while PeekMessageW(&mut msg, HWND(0), 0, 0, PM_REMOVE).as_bool() {
+                if msg.message == WM_DESTROY {
+                    Shell_NotifyIconW(NIM_DELETE, &nid);
+                    return;
+                }
+
+                if msg.message == WM_TRAY_CALLBACK {
+                    let event = msg.lParam.0 as u32;
+                    if event == WM_LBUTTONUP {
+                        let _ = tx.send(TrayAction::Toggle);
+                    } else if event == WM_RBUTTONUP {
+                        if let Ok(hmenu) = CreatePopupMenu() {
+                            let _ = AppendMenuW(hmenu, MF_STRING, 1, w!("Iniciar / parar"));
+                            let _ = AppendMenuW(
+                                hmenu,
+                                MF_STRING,
+                                2,
+                                w!("Ensinar corre\u{00e7}\u{00e3}o\u{2026}"),
+                            );
+                            let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, None);
+                            let _ = AppendMenuW(
+                                hmenu,
+                                MF_STRING,
+                                3,
+                                w!("Editar corre\u{00e7}\u{00f5}es (teach)"),
+                            );
+                            let _ =
+                                AppendMenuW(hmenu, MF_STRING, 4, w!("Editar vocabul\u{00e1}rio"));
+                            let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, None);
+                            let _ = AppendMenuW(hmenu, MF_STRING, 5, w!("Sair"));
+
+                            let mut pt = POINT::default();
+                            let _ = GetCursorPos(&mut pt);
+                            let _ = SetForegroundWindow(hwnd);
+                            let cmd = TrackPopupMenu(
+                                hmenu,
+                                TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+                                pt.x,
+                                pt.y,
+                                0,
+                                hwnd,
+                                None,
+                            );
+                            let _ = DestroyMenu(hmenu);
+
+                            match cmd.0 {
+                                1 => {
+                                    let _ = tx.send(TrayAction::Toggle);
+                                }
+                                2 => {
+                                    let _ = tx.send(TrayAction::Teach);
+                                }
+                                3 => {
+                                    let _ = tx.send(TrayAction::EditCorrections);
+                                }
+                                4 => {
+                                    let _ = tx.send(TrayAction::EditVocab);
+                                }
+                                5 => {
+                                    let _ = tx.send(TrayAction::Quit);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    });
+
+    Ok(TrayHandle { tx_state })
+}

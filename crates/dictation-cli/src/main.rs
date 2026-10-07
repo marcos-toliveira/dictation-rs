@@ -8,9 +8,10 @@
 
 use dictation_core::{AsrEngine, AsrOptions, Config, InjectMode};
 use dictation_groq::GroqEngine;
-use dictation_platform::inject::{ClipboardInjector, StdoutInjector, XdotoolInjector};
+use dictation_platform::inject::{PlatformClipboardInjector, PlatformTypeInjector, StdoutInjector};
 use dictation_platform::TextInjector;
 use std::io::{BufRead, BufReader, Write};
+#[cfg(not(windows))]
 use std::os::unix::net::UnixStream;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -40,7 +41,8 @@ fn main() {
     }
 }
 
-/// Envia uma linha ao daemon e imprime a resposta.
+/// Envia uma linha ao daemon e imprime a resposta (Unix domain socket).
+#[cfg(not(windows))]
 fn send(cfg: &Config, line: &str) {
     let sock = cfg.socket_path();
     match UnixStream::connect(&sock) {
@@ -57,21 +59,81 @@ fn send(cfg: &Config, line: &str) {
     }
 }
 
+/// Envia uma linha ao daemon e imprime a resposta (Named pipe no Windows).
+#[cfg(windows)]
+fn send(cfg: &Config, line: &str) {
+    let sock = cfg.socket_path();
+    let pipe_path = sock.to_string_lossy();
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(pipe_path.as_ref())
+    {
+        Ok(mut stream) => {
+            let _ = stream.write_all(format!("{line}\n").as_bytes());
+            let _ = stream.flush();
+            let mut reply = String::new();
+            let _ = BufReader::new(stream).read_line(&mut reply);
+            print!("{reply}");
+        }
+        Err(e) => {
+            eprintln!("daemon indisponível em {}: {e}", sock.display());
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Sobe o daemon destacado se o socket ainda não existir.
 fn ensure_daemon(cfg: &Config) {
     let sock = cfg.socket_path();
+    #[cfg(not(windows))]
     if sock.exists() {
         return;
     }
+    #[cfg(windows)]
+    if std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(sock.to_string_lossy().as_ref())
+        .is_ok()
+    {
+        return;
+    }
+
     let bin = std::env::var("DICTATIOND_BIN").unwrap_or_else(|_| "dictationd".into());
+
+    #[cfg(not(windows))]
     let _ = Command::new("setsid")
         .arg(&bin)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        let _ = Command::new(&bin)
+            .creation_flags(DETACHED_PROCESS)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+
     for _ in 0..80 {
+        #[cfg(not(windows))]
         if sock.exists() {
+            return;
+        }
+        #[cfg(windows)]
+        if std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(sock.to_string_lossy().as_ref())
+            .is_ok()
+        {
             return;
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -113,10 +175,10 @@ fn transcribe(cfg: &Config, args: &[String]) {
     let injector: Box<dyn TextInjector> = match cfg.inject {
         InjectMode::Stdout => Box::new(StdoutInjector),
         InjectMode::Clipboard => {
-            Box::new(ClipboardInjector::new().with_trailing_space(cfg.trailing_space))
+            Box::new(PlatformClipboardInjector::new().with_trailing_space(cfg.trailing_space))
         }
         InjectMode::Type => Box::new(
-            XdotoolInjector::new()
+            PlatformTypeInjector::new()
                 .with_delay_ms(cfg.type_delay_ms)
                 .with_trailing_space(cfg.trailing_space),
         ),
