@@ -8,9 +8,9 @@ Same behaviour as the original — **Groq** transcription (`whisper-large-v3-tur
 local `whisper.cpp` fallback — but with a redesigned core that fixes the bugs seen with
 long dictation and leaves clean extension points for other platforms.
 
-> **Status:** work in progress. `dictation-core` (state machine, sessions, append-only
-> segmentation, ASR contract) is implemented and tested. Platform (X11), daemon and CLI
-> crates are in progress.
+> **Status:** core + Groq + platform + daemon + CLI implemented and tested. The
+> headless path works end-to-end on Linux/X11 (cpal capture → Groq → inject). The GUI
+> (floating REC/preview overlay, tray) and the global hotkeys are the remaining work.
 
 ## Why a rewrite
 

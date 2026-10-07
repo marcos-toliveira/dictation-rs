@@ -1,0 +1,27 @@
+# Configuração do dictation-rs (TOML)
+# Copie para ~/.config/dictation-rs/config.toml
+
+# groq (online) | local (whisper.cpp — ainda não implementado no daemon)
+provider = "groq"
+language = "pt"
+model = "whisper-large-v3-turbo"
+
+# Dispositivo de captura (vazio = automático: prefere pipewire/pulse no Linux)
+# device = "pipewire"
+
+# Limite de segurança da gravação (segundos)
+max_seconds = 180
+
+# type (xdotool) | clipboard | stdout
+inject = "type"
+
+# Segmentação append-only (custo linear; evita "texto antigo no meio do novo")
+segment_seconds = 10.0
+overlap_seconds = 0.5
+min_segment_seconds = 0.3
+
+# Caminhos
+vault = "~/.config/anubis/groq.env"
+corrections = "~/.config/dictation/corrections.tsv"
+vocab = "~/.config/dictation/vocab.txt"
+# socket = "/run/user/1000/dictation-rs.sock"
