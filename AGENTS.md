@@ -61,6 +61,7 @@ cargo build --release --workspace
 - Overlay **não pode roubar foco** (senão a injeção erra o alvo).
 - O daemon **não pode bloquear** a thread de captura em HTTP (evita travar a captura).
 - **Bandeja no Windows**: o Windows 11 joga ícones novos no *overflow* (seta `^`). O app grava `IsPromoted=1` em `HKCU\Control Panel\NotifyIconSettings` (só se o usuário nunca escolheu) e re-adiciona o ícone; também trata `TaskbarCreated` para re-adicioná-lo se o Explorer reiniciar.
+- **Overlay no Windows**: `with_mouse_passthrough(true)` força `WS_EX_LAYERED` e o **glow/OpenGL não apresenta** (a janela aparece vazia). Não usar no Windows; o click-through/sem-foco vem de `WS_EX_TRANSPARENT | WS_EX_NOACTIVATE` aplicado por `SetWindowLongPtr` a cada quadro (o winit reaplica estilos ao processar comandos de viewport).
 
 ## Regras
 - **NUNCA** adicionar tags/assinaturas de coautoria de IA nos commits.

@@ -31,8 +31,8 @@ pub struct OverlayApp {
     last_reposition: f64,
     last_size: (f32, f32),
     last_win: Option<anchor::Rect>,
-    #[cfg(windows)]
-    style_applied: bool,
+    /// Último estado de visibilidade enviado (evita comandos redundantes).
+    visible: Option<bool>,
 }
 
 impl OverlayApp {
@@ -45,8 +45,7 @@ impl OverlayApp {
             last_reposition: -1.0,
             last_size: (0.0, 0.0),
             last_win: None,
-            #[cfg(windows)]
-            style_applied: false,
+            visible: None,
         }
     }
 }
@@ -66,7 +65,7 @@ impl eframe::App for OverlayApp {
         [0.0, 0.0, 0.0, 0.0]
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, native_frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let (recording, transcribing, preview) = {
             let s = self.state.lock().unwrap();
@@ -76,11 +75,17 @@ impl eframe::App for OverlayApp {
 
         // Esconde só quando não há nada para mostrar.
         if !recording && !transcribing && !has_text {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            if self.visible != Some(false) {
+                self.visible = Some(false);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
             ctx.request_repaint_after(Duration::from_millis(250));
             return;
         }
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        if self.visible != Some(true) {
+            self.visible = Some(true);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        }
 
         self.phase += 0.14;
         let pulse = 0.5 + 0.5 * self.phase.sin();
@@ -142,9 +147,16 @@ impl eframe::App for OverlayApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
         }
 
+        // No Windows, garante o click-through/sem-foco a cada quadro: o winit
+        // reaplica os estilos da janela ao processar comandos de viewport.
         #[cfg(windows)]
-        if !self.style_applied {
-            self.style_applied = window_helper::ensure_overlay_window_style("dictation-rec");
+        {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(handle) = native_frame.window_handle() {
+                if let RawWindowHandle::Win32(w) = handle.as_raw() {
+                    window_helper::apply_overlay_style(w.hwnd.get());
+                }
+            }
         }
 
         // Reancora periodicamente (sem depender do tamanho do conteúdo).

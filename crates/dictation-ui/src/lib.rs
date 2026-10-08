@@ -23,14 +23,18 @@ pub fn overlay_options(size: [f32; 2]) -> eframe::NativeOptions {
         .with_decorations(false)
         .with_transparent(true)
         .with_always_on_top()
-        .with_mouse_passthrough(true)
         .with_resizable(false)
         .with_taskbar(false)
         .with_inner_size(size);
 
+    // No Linux, o click-through vem do winit/egui. No Windows,
+    // `with_mouse_passthrough` força `WS_EX_LAYERED` — e o glow/OpenGL **não
+    // apresenta** numa janela *layered*. Lá aplicamos `WS_EX_TRANSPARENT`
+    // diretamente no `HWND` (ver `win_window::apply_overlay_style`).
     #[cfg(target_os = "linux")]
     {
         builder = builder
+            .with_mouse_passthrough(true)
             .with_window_type(egui::X11WindowType::Tooltip)
             // Janela NÃO gerenciada pelo WM: não rouba foco nem aparece na barra/taskbar.
             .with_override_redirect(true);
