@@ -52,12 +52,12 @@ Cada capacidade é isolada em traits ou abstrações condicionais (`#[cfg(target
   - Windows: thread dedicada rodando loop de mensagens Win32 com `RegisterHotKey` (F8 para toggle de gravação e F9 para ensinar correção).
 - **Overlay**:
   - Linux/X11: `override_redirect` + `X11WindowType::Tooltip` + `mouse_passthrough`.
-  - Windows: janela Win32 sem foco e click-through via `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE`, posicionada sobre a janela em foco detectada via `GetForegroundWindow` e `GetWindowRect`.
+  - Windows: janela Win32 sem foco e click-through via `WS_EX_TRANSPARENT | WS_EX_NOACTIVATE` aplicados por `SetWindowLongPtr` — **sem** `WS_EX_LAYERED`, que impede o glow/OpenGL de apresentar (janela vazia). Posicionada sobre a janela em foco via `GetForegroundWindow` e `GetWindowRect`.
 - **Bandeja**:
   - Linux: `ksni` (D-Bus StatusNotifierItem).
-  - Windows: `Shell_NotifyIconW` nativo com menu popup Win32 e suporte a `WM_COMMAND`.
+  - Windows: `Shell_NotifyIconW` nativo com menu popup (`TrackPopupMenu` + `TPM_RETURNCMD`) e ícone microfone/record desenhado via GDI (sem assets), promovido no Windows 11.
 - **IPC CLI ↔ Daemon**:
-  - Linux: Unix domain socket (`/tmp/dictation.sock` ou `~/.local/state/dictation/socket`).
+  - Linux: Unix domain socket (`${XDG_RUNTIME_DIR}/dictation.sock`, ex.: `/run/user/1000/dictation.sock`).
   - Windows: Windows Named Pipe (`\\.\pipe\dictation`).
 - **Caminhos de Configuração**:
   - Linux: `~/.config/dictation/config.ini`, cofre `~/.config/anubis/groq.env`.
