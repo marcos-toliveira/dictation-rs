@@ -7,14 +7,14 @@
 //!   para garantir que o overlay nunca roube foco e seja click-through.
 
 use crate::anchor::Rect;
-use windows::core::HSTRING;
-use windows::Win32::Foundation::POINT;
+use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
-    SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
+    GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, SetWindowLongPtrW,
+    SetWindowPos, GWL_EXSTYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
 };
 
 /// Retorna o retângulo da janela em foco atual (excluindo o próprio overlay).
@@ -71,19 +71,31 @@ pub fn monitor_rect_for(cx: f32, cy: f32) -> Rect {
     }
 }
 
-/// Garante que a janela do overlay possua `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE`.
-pub fn ensure_overlay_window_style(title: &str) -> bool {
+/// Aplica `WS_EX_TRANSPARENT | WS_EX_NOACTIVATE` na janela do overlay
+/// (click-through e sem roubo de foco).
+///
+/// **Sem** `WS_EX_LAYERED`: numa janela *layered* o glow/OpenGL não apresenta
+/// no Windows (a janela aparece, mas sem conteúdo).
+pub fn apply_overlay_style(hwnd: isize) -> bool {
     unsafe {
-        let hwnd = FindWindowW(None, &HSTRING::from(title));
-        if hwnd.0 != 0 {
-            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-            let needed = (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0 | WS_EX_NOACTIVATE.0) as isize;
-            if (ex_style & needed) != needed {
-                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | needed);
-            }
-            true
-        } else {
-            false
+        if hwnd == 0 {
+            return false;
         }
+        let hwnd = HWND(hwnd);
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let needed = (WS_EX_TRANSPARENT.0 | WS_EX_NOACTIVATE.0) as isize;
+        if (ex_style & needed) != needed {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | needed);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+        true
     }
 }
