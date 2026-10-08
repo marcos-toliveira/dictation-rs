@@ -62,25 +62,42 @@ fn send(cfg: &Config, line: &str) {
 /// Envia uma linha ao daemon e imprime a resposta (Named pipe no Windows).
 #[cfg(windows)]
 fn send(cfg: &Config, line: &str) {
+    use windows::core::HSTRING;
+    use windows::Win32::System::Pipes::WaitNamedPipeW;
+
     let sock = cfg.socket_path();
     let pipe_path = sock.to_string_lossy();
-    match std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(pipe_path.as_ref())
-    {
-        Ok(mut stream) => {
-            let _ = stream.write_all(format!("{line}\n").as_bytes());
-            let _ = stream.flush();
-            let mut reply = String::new();
-            let _ = BufReader::new(stream).read_line(&mut reply);
-            print!("{reply}");
+    let wide_name = HSTRING::from(pipe_path.as_ref());
+
+    let mut attempts = 0;
+    let stream = loop {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(pipe_path.as_ref())
+        {
+            Ok(s) => break s,
+            Err(e) => {
+                // os error 231 = ERROR_PIPE_BUSY (servidor está atendendo outra conexão ou reconectando)
+                if e.raw_os_error() == Some(231) && attempts < 10 {
+                    attempts += 1;
+                    unsafe {
+                        let _ = WaitNamedPipeW(&wide_name, 1000);
+                    }
+                    continue;
+                }
+                eprintln!("daemon indisponível em {}: {e}", sock.display());
+                std::process::exit(1);
+            }
         }
-        Err(e) => {
-            eprintln!("daemon indisponível em {}: {e}", sock.display());
-            std::process::exit(1);
-        }
-    }
+    };
+
+    let mut stream = stream;
+    let _ = stream.write_all(format!("{line}\n").as_bytes());
+    let _ = stream.flush();
+    let mut reply = String::new();
+    let _ = BufReader::new(stream).read_line(&mut reply);
+    print!("{reply}");
 }
 
 /// Sobe o daemon destacado se o socket ainda não existir.
@@ -91,13 +108,17 @@ fn ensure_daemon(cfg: &Config) {
         return;
     }
     #[cfg(windows)]
-    if std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(sock.to_string_lossy().as_ref())
-        .is_ok()
     {
-        return;
+        use windows::core::HSTRING;
+        use windows::Win32::Foundation::{GetLastError, ERROR_PIPE_BUSY};
+        use windows::Win32::System::Pipes::WaitNamedPipeW;
+
+        let wide_name = HSTRING::from(sock.to_string_lossy().as_ref());
+        unsafe {
+            if WaitNamedPipeW(&wide_name, 0).as_bool() || GetLastError() == ERROR_PIPE_BUSY {
+                return;
+            }
+        }
     }
 
     let bin = std::env::var("DICTATIOND_BIN").unwrap_or_else(|_| "dictationd".into());
@@ -128,13 +149,17 @@ fn ensure_daemon(cfg: &Config) {
             return;
         }
         #[cfg(windows)]
-        if std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(sock.to_string_lossy().as_ref())
-            .is_ok()
         {
-            return;
+            use windows::core::HSTRING;
+            use windows::Win32::Foundation::{GetLastError, ERROR_PIPE_BUSY};
+            use windows::Win32::System::Pipes::WaitNamedPipeW;
+
+            let wide_name = HSTRING::from(sock.to_string_lossy().as_ref());
+            unsafe {
+                if WaitNamedPipeW(&wide_name, 0).as_bool() || GetLastError() == ERROR_PIPE_BUSY {
+                    return;
+                }
+            }
         }
         std::thread::sleep(Duration::from_millis(50));
     }
