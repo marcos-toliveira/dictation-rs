@@ -10,6 +10,8 @@ pub mod overlay;
 pub mod state;
 pub mod tray;
 #[cfg(windows)]
+pub mod win_icon;
+#[cfg(windows)]
 pub mod win_window;
 #[cfg(target_os = "linux")]
 pub mod x11;
