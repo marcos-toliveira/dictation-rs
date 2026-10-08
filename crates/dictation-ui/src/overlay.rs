@@ -65,6 +65,8 @@ impl eframe::App for OverlayApp {
         [0.0, 0.0, 0.0, 0.0]
     }
 
+    // `native_frame` só é usado no Windows (aplicação dos estilos da janela).
+    #[cfg_attr(not(windows), allow(unused_variables))]
     fn ui(&mut self, ui: &mut egui::Ui, native_frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let (recording, transcribing, preview) = {
