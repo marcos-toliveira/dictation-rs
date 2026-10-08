@@ -47,7 +47,7 @@ cargo build --release --workspace
 
 ## Overlay / bandeja / atalhos
 - Overlay: eframe/egui **frameless, translúcido, click-through, sem roubar foco** (X11: `override_redirect` + `X11WindowType::Tooltip` + `mouse_passthrough`). Estados: **REC** → **"transcrevendo…"**.
-- Bandeja: `ksni` (StatusNotifierItem do KDE, sem GTK). Menu + estado.
+- Bandeja: `ksni` (StatusNotifierItem do KDE, sem GTK). Menu + estado. No Windows: `Shell_NotifyIconW`, com ícone **microfone/record desenhado via GDI** (sem assets) e auto-promovido.
 - Atalhos: **KGlobalAccel** (Plasma 6) via `set-shortcut.sh` (F8 ditar / F9 ensinar).
 
 ## Config
@@ -60,6 +60,7 @@ cargo build --release --workspace
 - **cpal/ALSA** desta máquina falha ~10% → no Linux o padrão é **ffmpeg**; no Windows usar **cpal** (WASAPI).
 - Overlay **não pode roubar foco** (senão a injeção erra o alvo).
 - O daemon **não pode bloquear** a thread de captura em HTTP (evita travar a captura).
+- **Bandeja no Windows**: o Windows 11 joga ícones novos no *overflow* (seta `^`). O app grava `IsPromoted=1` em `HKCU\Control Panel\NotifyIconSettings` (só se o usuário nunca escolheu) e re-adiciona o ícone; também trata `TaskbarCreated` para re-adicioná-lo se o Explorer reiniciar.
 
 ## Regras
 - **NUNCA** adicionar tags/assinaturas de coautoria de IA nos commits.

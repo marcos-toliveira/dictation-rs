@@ -132,6 +132,7 @@ impl TrayHandle {
 /// Sobe a bandeja em background no Windows (Shell_NotifyIconW).
 #[cfg(windows)]
 pub fn spawn_tray(tx: Sender<TrayAction>) -> Result<TrayHandle, String> {
+    use crate::win_icon;
     use std::sync::mpsc;
     use windows::core::w;
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
@@ -142,15 +143,19 @@ pub fn spawn_tray(tx: Sender<TrayAction>) -> Result<TrayHandle, String> {
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
         DispatchMessageW, GetCursorPos, LoadIconW, PeekMessageW, PostQuitMessage, RegisterClassW,
-        SetForegroundWindow, TrackPopupMenu, TranslateMessage, IDI_APPLICATION, MF_SEPARATOR,
-        MF_STRING, PM_REMOVE, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE,
-        WINDOW_STYLE, WM_APP, WM_DESTROY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW,
+        RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage,
+        IDI_APPLICATION, MF_SEPARATOR, MF_STRING, PM_REMOVE, TPM_NONOTIFY, TPM_RETURNCMD,
+        TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_DESTROY, WM_LBUTTONUP,
+        WM_RBUTTONUP, WNDCLASSW,
     };
 
     let (tx_state, rx_state) = mpsc::channel::<bool>();
 
     std::thread::spawn(move || unsafe {
         const WM_TRAY_CALLBACK: u32 = WM_APP + 10;
+        // O shell envia esta mensagem quando o Explorer (re)inicia: os apps
+        // precisam re-adicionar o ícone, senão ele "some" da bandeja.
+        let taskbar_created = RegisterWindowMessageW(w!("TaskbarCreated"));
 
         unsafe extern "system" fn window_proc(
             hwnd: HWND,
@@ -187,8 +192,17 @@ pub fn spawn_tray(tx: Sender<TrayAction>) -> Result<TrayHandle, String> {
             None,
             None,
         );
+        if hwnd.0 == 0 {
+            tracing::warn!("não foi possível criar a janela da bandeja");
+            return;
+        }
 
-        let icon = LoadIconW(None, IDI_APPLICATION).unwrap_or_default();
+        // Ícones próprios (microfone no ocioso / círculo vermelho gravando), com
+        // fallback para o ícone padrão do Windows caso a geração GDI falhe.
+        let idle_icon = win_icon::idle_icon()
+            .or_else(|| LoadIconW(None, IDI_APPLICATION).ok())
+            .unwrap_or_default();
+        let rec_icon = win_icon::recording_icon().unwrap_or(idle_icon);
 
         fn to_sz_tip(s: &str) -> [u16; 128] {
             let mut buf = [0u16; 128];
@@ -204,29 +218,48 @@ pub fn spawn_tray(tx: Sender<TrayAction>) -> Result<TrayHandle, String> {
             uID: 1001,
             uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
             uCallbackMessage: WM_TRAY_CALLBACK,
-            hIcon: icon,
+            hIcon: idle_icon,
             szTip: to_sz_tip("Dictation - ocioso (F8)"),
             ..Default::default()
         };
 
-        Shell_NotifyIconW(NIM_ADD, &nid);
+        if !Shell_NotifyIconW(NIM_ADD, &nid).as_bool() {
+            tracing::warn!("Shell_NotifyIconW(NIM_ADD) falhou");
+        }
+
+        // Windows 11 coloca ícones novos no *overflow*. Promove uma única vez
+        // (só quando o usuário nunca escolheu) e re-adiciona para o shell reler.
+        if win_icon::ensure_promoted() {
+            let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
+            let _ = Shell_NotifyIconW(NIM_ADD, &nid);
+        }
 
         let mut msg = windows::Win32::UI::WindowsAndMessaging::MSG::default();
         loop {
             while let Ok(recording) = rx_state.try_recv() {
-                let tip_text = if recording {
+                nid.hIcon = if recording { rec_icon } else { idle_icon };
+                nid.szTip = to_sz_tip(if recording {
                     "Dictation - GRAVANDO (F8)"
                 } else {
                     "Dictation - ocioso (F8)"
-                };
-                nid.szTip = to_sz_tip(tip_text);
-                Shell_NotifyIconW(NIM_MODIFY, &nid);
+                });
+                let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
             }
 
             while PeekMessageW(&mut msg, HWND(0), 0, 0, PM_REMOVE).as_bool() {
                 if msg.message == WM_DESTROY {
-                    Shell_NotifyIconW(NIM_DELETE, &nid);
+                    let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
+                    if rec_icon.0 != idle_icon.0 {
+                        win_icon::destroy(rec_icon);
+                    }
+                    win_icon::destroy(idle_icon);
                     return;
+                }
+
+                // Explorer reiniciou: re-adiciona o ícone.
+                if msg.message == taskbar_created {
+                    nid.hIcon = idle_icon;
+                    let _ = Shell_NotifyIconW(NIM_ADD, &nid);
                 }
 
                 if msg.message == WM_TRAY_CALLBACK {

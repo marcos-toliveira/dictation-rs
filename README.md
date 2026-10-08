@@ -89,7 +89,7 @@ Defina a variável de ambiente `GROQ_API_KEY` ou insira a chave no cofre `%APPDA
    - **`F8`**: Gravar / Parar (Push-to-talk ou Toggle). Ao parar, transcreve com Groq e digita diretamente na janela em foco via `SendInput` (com suporte integral a Unicode e acentuação).
    - **`F9`**: Ensinar correção (`teach`). Captura o texto selecionado e abre diálogo para registrar substituição permanente.
 3. **Controle via CLI ou Bandeja:**
-   - Ícone nativo na bandeja do sistema (`System Tray`) com menu de contexto e indicador de status.
+   - Ícone nativo na bandeja do sistema (`System Tray`) com menu de contexto e indicador de status: **microfone** quando ocioso e **círculo vermelho** durante a gravação. No Windows 11 o ícone é promovido automaticamente para aparecer ao lado do relógio.
    - CLI via Named Pipe (`\\.\pipe\dictation`):
      ```powershell
      dictation toggle    # Iniciar/parar gravação
