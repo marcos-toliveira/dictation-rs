@@ -95,7 +95,12 @@ impl Default for Config {
             trailing_space: true,
             notify: true,
             indicator: true,
-            indicator_anchor: "bottom-right".into(),
+            // No Windows a caixa de texto costuma ficar no rodapé (chat) → bottom-center.
+            indicator_anchor: if cfg!(windows) {
+                "bottom-center".into()
+            } else {
+                "bottom-right".into()
+            },
             preview: true,
             preview_interval_ms: 1500,
             preview_anchor: "bottom-center".into(),
