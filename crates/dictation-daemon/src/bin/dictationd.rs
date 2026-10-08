@@ -577,8 +577,9 @@ fn run_socket(daemon: Arc<Mutex<Daemon>>, pipe_path: PathBuf) {
                             let _ = file.flush();
                         }
                     }
+                    // Desconecta ANTES do `file` (dono do handle) ser dropado/fechado.
+                    let _ = DisconnectNamedPipe(handle);
                 }
-                let _ = DisconnectNamedPipe(handle);
             }
         }
     }
