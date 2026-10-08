@@ -77,38 +77,62 @@ impl AudioCapture for CpalCapture {
         if let Ok(name) = device.name() {
             tracing::info!(device = %name, "dispositivo de captura");
         }
-        let config = device
-            .default_input_config()
-            .map_err(|e| CaptureError::Device(e.to_string()))?;
-        let sample_format = config.sample_format();
-        let in_rate = config.sample_rate().0;
-        let channels = config.channels() as usize;
-        let stream_config: cpal::StreamConfig = config.into();
 
         let (tx, rx) = mpsc::channel::<Vec<i16>>();
-        let err_fn = |e| tracing::error!(error = %e, "cpal stream error");
 
-        let stream = match sample_format {
-            cpal::SampleFormat::F32 => {
-                build::<f32>(&device, &stream_config, channels, in_rate, tx, err_fn)
+        // Tenta primeiro o default_input_config().
+        // No Windows/WASAPI, alguns dispositivos reportam F32 como padrão mas falham com AUDCLNT_E_UNSUPPORTED_FORMAT (0x88890008),
+        // funcionando perfeitamente em I16 ou I32.
+        let mut last_err = None;
+        if let Ok(def_cfg) = device.default_input_config() {
+            match try_build_stream(&device, &def_cfg, tx.clone()) {
+                Ok(stream) => {
+                    stream
+                        .play()
+                        .map_err(|e| CaptureError::Stream(e.to_string()))?;
+                    self.stream = Some(stream);
+                    self.rx = Some(rx);
+                    return Ok(());
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                }
             }
-            cpal::SampleFormat::I16 => {
-                build::<i16>(&device, &stream_config, channels, in_rate, tx, err_fn)
-            }
-            cpal::SampleFormat::U16 => {
-                build::<u16>(&device, &stream_config, channels, in_rate, tx, err_fn)
-            }
-            other => Err(CaptureError::Stream(format!(
-                "formato de amostra não suportado: {other:?}"
-            ))),
-        }?;
+        }
 
-        stream
-            .play()
-            .map_err(|e| CaptureError::Stream(e.to_string()))?;
-        self.stream = Some(stream);
-        self.rx = Some(rx);
-        Ok(())
+        // Fallback: busca em supported_input_configs() (priorizando I16 e F32)
+        if let Ok(supported) = device.supported_input_configs() {
+            let mut configs: Vec<_> = supported.map(|c| c.with_max_sample_rate()).collect();
+            // Prioriza I16 no fallback por ser o formato mais universal em interfaces de áudio USB
+            configs.sort_by_key(|c| match c.sample_format() {
+                cpal::SampleFormat::I16 => 0,
+                cpal::SampleFormat::F32 => 1,
+                cpal::SampleFormat::I32 => 2,
+                _ => 3,
+            });
+
+            for cfg in configs {
+                match try_build_stream(&device, &cfg, tx.clone()) {
+                    Ok(stream) => {
+                        stream
+                            .play()
+                            .map_err(|e| CaptureError::Stream(e.to_string()))?;
+                        self.stream = Some(stream);
+                        self.rx = Some(rx);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        last_err = Some(e);
+                    }
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            CaptureError::Device(
+                "não foi possível iniciar stream em nenhuma configuração suportada".into(),
+            )
+        }))
     }
 
     fn recv(&mut self) -> Option<Vec<i16>> {
@@ -119,6 +143,36 @@ impl AudioCapture for CpalCapture {
         self.stream = None; // drop encerra a captura
         self.rx = None;
         Ok(())
+    }
+}
+
+fn try_build_stream(
+    device: &cpal::Device,
+    config: &cpal::SupportedStreamConfig,
+    tx: mpsc::Sender<Vec<i16>>,
+) -> Result<cpal::Stream, CaptureError> {
+    let sample_format = config.sample_format();
+    let in_rate = config.sample_rate().0;
+    let channels = config.channels() as usize;
+    let stream_config: cpal::StreamConfig = config.clone().into();
+    let err_fn = |e| tracing::error!(error = %e, "cpal stream error");
+
+    match sample_format {
+        cpal::SampleFormat::F32 => {
+            build::<f32>(device, &stream_config, channels, in_rate, tx, err_fn)
+        }
+        cpal::SampleFormat::I16 => {
+            build::<i16>(device, &stream_config, channels, in_rate, tx, err_fn)
+        }
+        cpal::SampleFormat::U16 => {
+            build::<u16>(device, &stream_config, channels, in_rate, tx, err_fn)
+        }
+        cpal::SampleFormat::I32 => {
+            build::<i32>(device, &stream_config, channels, in_rate, tx, err_fn)
+        }
+        other => Err(CaptureError::Stream(format!(
+            "formato de amostra não suportado: {other:?}"
+        ))),
     }
 }
 
@@ -139,6 +193,11 @@ impl ToF32 for i16 {
 impl ToF32 for u16 {
     fn to_f32(self) -> f32 {
         (self as f32 - 32768.0) / 32768.0
+    }
+}
+impl ToF32 for i32 {
+    fn to_f32(self) -> f32 {
+        self as f32 / 2147483648.0
     }
 }
 
@@ -364,5 +423,21 @@ mod tests {
         let input: Vec<f32> = (0..100).map(|i| (i as f32 / 100.0) - 0.5).collect();
         let out = r.process(&input);
         assert!((out.len() as i64 - 99).abs() <= 2, "veio {}", out.len());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn cpal_default_input_device_exists() {
+        let host = cpal::default_host();
+        let dev = host.default_input_device();
+        if let Some(d) = dev {
+            let _ = d.default_input_config();
+            let mut cap = CpalCapture::new();
+            if cap.start().is_ok() {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                let _ = cap.recv();
+                let _ = cap.stop();
+            }
+        }
     }
 }

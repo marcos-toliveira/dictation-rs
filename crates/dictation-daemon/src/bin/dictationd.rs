@@ -374,16 +374,33 @@ fn teach_dialog(cfg: &Config) {
 }
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
     let cfg = Config::load_or_default(&config_path());
     let _ = std::fs::create_dir_all(&cfg.state_dir);
+
+    let log_path = cfg.state_dir.join("dictationd.log");
+    if let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        tracing_subscriber::fmt()
+            .with_target(false)
+            .with_writer(file)
+            .with_ansi(false)
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_target(false)
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .init();
+    }
 
     let asr = build_asr(&cfg);
     let injector: Arc<dyn TextInjector> = match cfg.inject {
@@ -548,12 +565,18 @@ fn run_socket(daemon: Arc<Mutex<Daemon>>, pipe_path: PathBuf) {
 
             if connected {
                 let d = Arc::clone(&daemon);
-                let mut file = std::fs::File::from_raw_handle(handle.0 as *mut std::ffi::c_void);
-                let mut line = String::new();
-                if BufReader::new(&file).read_line(&mut line).is_ok() {
-                    let reply = d.lock().unwrap().handle(line.trim());
-                    let _ = file.write_all(format!("{reply}\n").as_bytes());
-                    let _ = file.flush();
+                {
+                    let mut file =
+                        std::fs::File::from_raw_handle(handle.0 as *mut std::ffi::c_void);
+                    let mut line = String::new();
+                    if BufReader::new(&file).read_line(&mut line).is_ok() {
+                        let cmd = line.trim();
+                        if !cmd.is_empty() {
+                            let reply = d.lock().unwrap().handle(cmd);
+                            let _ = file.write_all(format!("{reply}\n").as_bytes());
+                            let _ = file.flush();
+                        }
+                    }
                 }
                 let _ = DisconnectNamedPipe(handle);
             }

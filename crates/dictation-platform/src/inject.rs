@@ -312,7 +312,15 @@ impl TextInjector for WindowsTypeInjector {
 
                 let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
                 if sent != inputs.len() as u32 {
-                    return Err(InjectError::Failed("SendInput falhou".into()));
+                    let err = unsafe { windows::Win32::Foundation::GetLastError() };
+                    tracing::warn!(
+                        ?err,
+                        "SendInput falhou, utilizando fallback para injeção via clipboard"
+                    );
+                    let clip = WindowsClipboardInjector::new()
+                        .with_trailing_space(self.trailing_space)
+                        .with_initial_delay_ms(self.initial_delay_ms);
+                    return clip.inject(text);
                 }
 
                 if self.delay_ms > 0 {
