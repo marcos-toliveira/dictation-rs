@@ -62,6 +62,72 @@ fn tail(text: &str, max: usize) -> String {
     format!("…{}", text.chars().skip(skip).collect::<String>())
 }
 
+/// Tamanho da janela para o estado atual (só-badge / "transcrevendo…" / com prévia).
+pub(crate) fn overlay_size(recording: bool, preview: &str) -> egui::Vec2 {
+    if !preview.is_empty() {
+        BUBBLE
+    } else if recording {
+        BADGE
+    } else {
+        // "transcrevendo…" precisa de mais largura que "REC".
+        egui::vec2(170.0, 38.0)
+    }
+}
+
+/// Desenha o conteúdo do overlay (badge REC pulsante / bolha de prévia) num `Ui` e
+/// devolve o **tamanho** do estado atual.
+///
+/// Compartilhado pelo backend `eframe` (X11/Windows) e pelo layer-shell (Wayland),
+/// para os dois renderizarem exatamente a mesma UI.
+pub(crate) fn content(ui: &mut egui::Ui, recording: bool, preview: &str, pulse: f32) -> egui::Vec2 {
+    let has_text = !preview.is_empty();
+    let size = overlay_size(recording, preview);
+    let shown = tail(preview, PREVIEW_MAX);
+
+    let frame = egui::Frame::NONE
+        .fill(egui::Color32::from_rgba_unmultiplied(18, 18, 18, 205))
+        .corner_radius(12.0)
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .shadow(egui::epaint::Shadow::NONE);
+
+    frame.show(ui, |ui| {
+        let w = size.x - 24.0;
+        ui.set_min_width(w);
+        ui.set_max_width(w);
+        let (label, color) = if recording {
+            ("REC", egui::Color32::from_rgb(235, 45, 45))
+        } else {
+            ("transcrevendo…", egui::Color32::from_rgb(240, 180, 60))
+        };
+        ui.horizontal(|ui| {
+            // Alocação FIXA do ponto (o raio pulsante não muda o layout).
+            let d = 16.0;
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(d, d), egui::Sense::hover());
+            let r = 5.0 + 3.0 * pulse;
+            ui.painter().circle_filled(
+                rect.center(),
+                r,
+                egui::Color32::from_rgba_unmultiplied(
+                    color.r(),
+                    color.g(),
+                    color.b(),
+                    (180.0 + 75.0 * pulse) as u8,
+                ),
+            );
+            ui.label(egui::RichText::new(label).strong().size(12.0));
+        });
+        if has_text {
+            ui.add_space(2.0);
+            ui.add(
+                egui::Label::new(egui::RichText::new(&shown).size(14.0))
+                    .wrap()
+                    .selectable(false),
+            );
+        }
+    });
+    size
+}
+
 impl eframe::App for OverlayApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         [0.0, 0.0, 0.0, 0.0]
@@ -93,57 +159,7 @@ impl eframe::App for OverlayApp {
 
         self.phase += 0.14;
         let pulse = 0.5 + 0.5 * self.phase.sin();
-        let size = if has_text {
-            BUBBLE
-        } else if recording {
-            BADGE
-        } else {
-            // "transcrevendo…" precisa de mais largura que "REC".
-            egui::vec2(170.0, 38.0)
-        };
-        let shown = tail(&preview, PREVIEW_MAX);
-
-        let frame = egui::Frame::NONE
-            .fill(egui::Color32::from_rgba_unmultiplied(18, 18, 18, 205))
-            .corner_radius(12.0)
-            .inner_margin(egui::Margin::symmetric(12, 8))
-            .shadow(egui::epaint::Shadow::NONE);
-
-        frame.show(ui, |ui| {
-            let w = size.x - 24.0;
-            ui.set_min_width(w);
-            ui.set_max_width(w);
-            let (label, color) = if recording {
-                ("REC", egui::Color32::from_rgb(235, 45, 45))
-            } else {
-                ("transcrevendo…", egui::Color32::from_rgb(240, 180, 60))
-            };
-            ui.horizontal(|ui| {
-                // Alocação FIXA do ponto (o raio pulsante não muda o layout).
-                let d = 16.0;
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(d, d), egui::Sense::hover());
-                let r = 5.0 + 3.0 * pulse;
-                ui.painter().circle_filled(
-                    rect.center(),
-                    r,
-                    egui::Color32::from_rgba_unmultiplied(
-                        color.r(),
-                        color.g(),
-                        color.b(),
-                        (180.0 + 75.0 * pulse) as u8,
-                    ),
-                );
-                ui.label(egui::RichText::new(label).strong().size(12.0));
-            });
-            if has_text {
-                ui.add_space(2.0);
-                ui.add(
-                    egui::Label::new(egui::RichText::new(&shown).size(14.0))
-                        .wrap()
-                        .selectable(false),
-                );
-            }
-        });
+        let size = content(ui, recording, &preview, pulse);
 
         // Ajusta a janela ao tamanho fixo do estado (só quando muda).
         if (size.x - self.last_size.0).abs() > 0.5 || (size.y - self.last_size.1).abs() > 0.5 {

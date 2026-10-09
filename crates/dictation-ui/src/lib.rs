@@ -10,6 +10,8 @@ pub mod geometry;
 #[cfg(target_os = "linux")]
 pub mod kwin;
 pub mod overlay;
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+pub mod overlay_wayland;
 pub mod state;
 pub mod tray;
 #[cfg(windows)]

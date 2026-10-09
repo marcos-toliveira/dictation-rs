@@ -532,7 +532,19 @@ fn main() {
     }
 
     tracing::info!("dictationd pronto");
-    // Thread principal: overlay (exigência do winit).
+    // Thread principal: overlay (exigência do winit). No Wayland (Linux), o overlay
+    // usa layer-shell + egui/wgpu; senão, o eframe/winit.
+    #[cfg(target_os = "linux")]
+    {
+        if dictation_platform::session::is_wayland() {
+            dictation_ui::overlay_wayland::run_overlay(
+                ui,
+                cfg.indicator_anchor.clone(),
+                cfg.preview_anchor.clone(),
+            );
+            return;
+        }
+    }
     let _ = dictation_ui::run_overlay(ui, cfg.indicator_anchor.clone(), cfg.preview_anchor.clone());
 }
 

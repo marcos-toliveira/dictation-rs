@@ -1,16 +1,12 @@
-//! **F4 (integração)** — overlay Wayland com **egui** renderizado via `wgpu` numa
-//! superfície **layer-shell**. Substitui o `eframe`/`winit` (que não faz layer-shell)
-//! no caminho Wayland.
+//! Overlay Wayland via **layer-shell** (`zwlr_layer_surface_v1`) + **egui**/`wgpu`.
 //!
-//! Prova de conceito: cria a `zwlr_layer_surface_v1` (camada Overlay, ancorada,
-//! `keyboard_interactivity=none`, input region vazia = click-through), cria a surface
-//! `wgpu` a partir dos *raw handles* da `wl_surface` e desenha o badge REC com egui.
+//! Substitui o `eframe`/`winit` no caminho Wayland (que não faz layer-shell): cria
+//! uma superfície de camada `Overlay`, ancorada, **sem foco de teclado** e
+//! **click-through** (input region vazia), e renderiza a **mesma UI** do
+//! [`crate::overlay::content`] com `egui-wgpu`.
 //!
-//! Rodar numa sessão Wayland:
-//! ```sh
-//! cargo run -p dictation-ui --features wayland --example overlay_wayland_egui
-//! ```
-//! Sai sozinho após ~8 s.
+//! O posicionamento sobre a janela em foco é emulado com âncora `TOP|LEFT` +
+//! *margins* (o layer-shell ancora a margens, não a coordenadas arbitrárias).
 
 use std::ffi::c_void;
 use std::num::NonZeroU32;
@@ -41,67 +37,197 @@ use wayland_client::{
     Connection, Proxy, QueueHandle,
 };
 
-const W: u32 = 360;
-const H: u32 = 90;
-const RUN: Duration = Duration::from_secs(8);
+use crate::anchor;
+use crate::geometry::GeometryProvider;
+use crate::state::SharedUi;
 
-fn main() {
-    let conn = Connection::connect_to_env().expect("conectar ao compositor Wayland");
+/// Intervalo mínimo entre recomputos de estado/posição.
+const TICK: Duration = Duration::from_millis(60);
+/// Reancoragem na janela em foco (mais espaçada que o tick).
+const REPOSITION: Duration = Duration::from_millis(500);
+
+/// Roda o overlay Wayland. **Bloqueia** (chamar na thread principal).
+pub fn run_overlay(state: SharedUi, indicator_anchor: String, preview_anchor: String) {
+    let conn = match Connection::connect_to_env() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "overlay Wayland: falha ao conectar no compositor");
+            return;
+        }
+    };
     let display_ptr = conn.display().id().as_ptr() as *mut c_void;
-    let (globals, mut event_queue) = registry_queue_init(&conn).expect("registry");
+    let (globals, mut event_queue) = match registry_queue_init(&conn) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "overlay Wayland: registry");
+            return;
+        }
+    };
     let qh = event_queue.handle();
 
-    let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor indisponível");
-    let layer_shell = LayerShell::bind(&globals, &qh).expect("wlr-layer-shell indisponível");
-    let shm = Shm::bind(&globals, &qh).expect("wl_shm indisponível");
+    let compositor = match CompositorState::bind(&globals, &qh) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "overlay Wayland: wl_compositor indisponível");
+            return;
+        }
+    };
+    let layer_shell = match LayerShell::bind(&globals, &qh) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!(error = %e, "overlay Wayland: wlr-layer-shell indisponível");
+            return;
+        }
+    };
+    let shm = match Shm::bind(&globals, &qh) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "overlay Wayland: wl_shm indisponível");
+            return;
+        }
+    };
 
     let surface = compositor.create_surface(&qh);
     let surface_ptr = surface.id().as_ptr() as *mut c_void;
     let layer =
         layer_shell.create_layer_surface(&qh, surface, Layer::Overlay, Some("dictation-rec"), None);
-    layer.set_anchor(Anchor::BOTTOM | Anchor::RIGHT);
+    // Ancorado no canto superior esquerdo + margins = posição absoluta (emulada).
+    layer.set_anchor(Anchor::TOP | Anchor::LEFT);
     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-    layer.set_size(W, H);
+    let size = crate::overlay::overlay_size(false, "");
+    layer.set_size(size.x as u32, size.y as u32);
 
-    let region = Region::new(&compositor).expect("wl_region");
-    layer
-        .wl_surface()
-        .set_input_region(Some(region.wl_region()));
+    // Click-through: input region vazia.
+    if let Ok(region) = Region::new(&compositor) {
+        layer
+            .wl_surface()
+            .set_input_region(Some(region.wl_region()));
+    }
     layer.commit();
-    drop(region);
 
-    let mut app = OverlayEgui {
+    let mut app = WaylandOverlay {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
         shm,
-        exit: false,
-        start: Instant::now(),
-        width: W,
-        height: H,
-        layer,
+        state,
+        indicator_anchor,
+        preview_anchor,
+        phase: 0.0,
+        geom: crate::geometry::provider(),
+        last_win: None,
+        last_size: (size.x as u32, size.y as u32),
+        last_pos: (i32::MIN, i32::MIN),
+        last_tick: Instant::now(),
+        last_reposition: Instant::now(),
         display_ptr,
         surface_ptr,
+        layer,
         gfx: None,
+        exit: false,
     };
 
+    tracing::info!("overlay Wayland (layer-shell) iniciado");
     while !app.exit {
-        event_queue.blocking_dispatch(&mut app).expect("dispatch");
+        if let Err(e) = event_queue.blocking_dispatch(&mut app) {
+            tracing::error!(error = %e, "overlay Wayland: dispatch");
+            break;
+        }
     }
-    println!("overlay_wayland_egui: encerrado");
 }
 
-struct OverlayEgui {
+struct WaylandOverlay {
     registry_state: RegistryState,
     output_state: OutputState,
     shm: Shm,
-    exit: bool,
-    start: Instant,
-    width: u32,
-    height: u32,
-    layer: LayerSurface,
+    state: SharedUi,
+    indicator_anchor: String,
+    preview_anchor: String,
+    phase: f32,
+    geom: Box<dyn GeometryProvider>,
+    last_win: Option<anchor::Rect>,
+    last_size: (u32, u32),
+    last_pos: (i32, i32),
+    last_tick: Instant,
+    last_reposition: Instant,
     display_ptr: *mut c_void,
     surface_ptr: *mut c_void,
+    layer: LayerSurface,
     gfx: Option<Gfx>,
+    exit: bool,
+}
+
+impl WaylandOverlay {
+    /// Um passo do overlay: lê o estado, ajusta tamanho/posição e desenha.
+    fn tick(&mut self, qh: &QueueHandle<Self>) {
+        // Mantém o loop acordado.
+        self.layer
+            .wl_surface()
+            .frame(qh, FrameCallbackData(self.layer.wl_surface().clone()));
+
+        let now = Instant::now();
+        if now.duration_since(self.last_tick) < TICK {
+            return;
+        }
+        self.last_tick = now;
+
+        let (recording, transcribing, preview) = {
+            let s = self.state.lock().unwrap();
+            (s.recording, s.transcribing, s.preview.trim().to_string())
+        };
+        let visible = recording || transcribing || !preview.is_empty();
+        self.phase += 0.14;
+        let pulse = 0.5 + 0.5 * self.phase.sin();
+
+        let size = crate::overlay::overlay_size(recording, &preview);
+        let (w, h) = (size.x as u32, size.y as u32);
+        let mut needs_configure = false;
+        if (w, h) != self.last_size {
+            self.last_size = (w, h);
+            self.layer.set_size(w, h);
+            needs_configure = true;
+        }
+
+        // Reancora na janela em foco (com guarda anti-loop).
+        if visible && now.duration_since(self.last_reposition) >= REPOSITION {
+            self.last_reposition = now;
+            if let Some(win) = self.geom.active_window_rect() {
+                self.last_win = Some(win);
+            }
+        }
+        if visible {
+            if let Some(win) = self.last_win {
+                let (cx, cy) = win.center();
+                let monitor = self.geom.monitor_rect_for(cx, cy);
+                let anchor = if preview.is_empty() {
+                    &self.indicator_anchor
+                } else {
+                    &self.preview_anchor
+                };
+                let (px, py) = anchor::anchor_pos(anchor, win, monitor, (size.x, size.y));
+                let pos = (px.max(0.0) as i32, py.max(0.0) as i32);
+                if pos != self.last_pos {
+                    self.last_pos = pos;
+                    self.layer.set_margin(pos.1, 0, 0, pos.0);
+                    needs_configure = true;
+                }
+            }
+        }
+
+        if needs_configure {
+            self.layer.commit();
+        }
+
+        // Inicializa a GPU na primeira vez (precisa da superfície já criada).
+        if self.gfx.is_none() {
+            self.gfx = Some(Gfx::new(self.display_ptr, self.surface_ptr, self.last_size));
+        }
+        if let Some(gfx) = self.gfx.as_mut() {
+            if (gfx.width, gfx.height) != self.last_size {
+                gfx.resize(self.last_size);
+            }
+            gfx.render(visible, recording, &preview, pulse);
+        }
+    }
 }
 
 struct Gfx {
@@ -111,34 +237,16 @@ struct Gfx {
     config: wgpu::SurfaceConfiguration,
     ctx: egui::Context,
     renderer: egui_wgpu::Renderer,
-}
-
-impl OverlayEgui {
-    fn ensure_gfx(&mut self) {
-        if self.gfx.is_some() {
-            return;
-        }
-        self.gfx = Some(Gfx::new(
-            self.display_ptr,
-            self.surface_ptr,
-            self.width,
-            self.height,
-        ));
-    }
-
-    fn draw(&mut self, qh: &QueueHandle<Self>) {
-        // Pede o próximo frame (mantém o loop acordado) e desenha.
-        self.layer
-            .wl_surface()
-            .frame(qh, FrameCallbackData(self.layer.wl_surface().clone()));
-        if let Some(gfx) = self.gfx.as_mut() {
-            gfx.render();
-        }
-    }
+    width: u32,
+    height: u32,
 }
 
 impl Gfx {
-    fn new(display_ptr: *mut c_void, surface_ptr: *mut c_void, width: u32, height: u32) -> Self {
+    fn new(
+        display_ptr: *mut c_void,
+        surface_ptr: *mut c_void,
+        (width, height): (u32, u32),
+    ) -> Self {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             flags: wgpu::InstanceFlags::default(),
@@ -146,7 +254,6 @@ impl Gfx {
             backend_options: wgpu::BackendOptions::default(),
             display: None,
         });
-
         let raw_display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
             NonNull::new(display_ptr).expect("wl_display não nulo"),
         ));
@@ -159,8 +266,7 @@ impl Gfx {
                 raw_window_handle: raw_window,
             })
         }
-        .expect("criar surface wgpu a partir da wl_surface");
-
+        .expect("surface wgpu");
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
             compatible_surface: Some(&surface),
@@ -172,7 +278,6 @@ impl Gfx {
             ..Default::default()
         }))
         .expect("device wgpu");
-
         let caps = surface.get_capabilities(&adapter);
         // egui-wgpu faz o gamma no shader: prefira um framebuffer NÃO-sRGB.
         let format = caps
@@ -187,7 +292,6 @@ impl Gfx {
             })
             .or_else(|| caps.formats.iter().copied().find(|f| !f.is_srgb()))
             .unwrap_or(caps.formats[0]);
-        // Overlay é translúcido: preferir alpha pré-multiplicado.
         let alpha_mode = caps
             .alpha_modes
             .iter()
@@ -206,14 +310,10 @@ impl Gfx {
             view_formats: vec![],
         };
         surface.configure(&device, &config);
-
         let ctx = egui::Context::default();
         let renderer =
             egui_wgpu::Renderer::new(&device, format, egui_wgpu::RendererOptions::default());
-        println!(
-            "overlay_wayland_egui: wgpu pronto ({}x{}, {:?}, alpha={:?})",
-            width, height, format, config.alpha_mode
-        );
+        tracing::info!(%width, %height, "overlay Wayland: wgpu pronto");
         Gfx {
             surface,
             device,
@@ -221,35 +321,35 @@ impl Gfx {
             config,
             ctx,
             renderer,
+            width,
+            height,
         }
     }
 
-    fn render(&mut self) {
+    fn resize(&mut self, (width, height): (u32, u32)) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        self.width = width;
+        self.height = height;
+        self.config.width = width;
+        self.config.height = height;
+        self.surface.configure(&self.device, &self.config);
+    }
+
+    fn render(&mut self, visible: bool, recording: bool, preview: &str, pulse: f32) {
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(self.config.width as f32, self.config.height as f32),
+                egui::vec2(self.width as f32, self.height as f32),
             )),
             ..Default::default()
         };
         let mut output = self.ctx.run_ui(raw_input, |ui| {
-            egui::Frame::NONE
-                .fill(egui::Color32::from_rgba_unmultiplied(18, 18, 18, 205))
-                .corner_radius(12.0)
-                .inner_margin(egui::Margin::symmetric(12, 8))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("\u{25CF}")
-                                .color(egui::Color32::from_rgb(235, 45, 45))
-                                .size(16.0),
-                        );
-                        ui.label(egui::RichText::new("REC").strong().size(12.0));
-                    });
-                });
+            if visible {
+                crate::overlay::content(ui, recording, preview, pulse);
+            }
         });
-        // Aplica texturas do egui (fonte) antes de desenhar; sem isto, o epaint
-        // entra em pânico ao dropar `TexturesDelta` com deltas não aplicados.
         for (id, deltas) in &output.textures_delta.set {
             for d in deltas {
                 self.renderer
@@ -258,7 +358,7 @@ impl Gfx {
         }
         let paint_jobs = self.ctx.tessellate(output.shapes, output.pixels_per_point);
         let screen = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [self.config.width, self.config.height],
+            size_in_pixels: [self.width, self.height],
             pixels_per_point: output.pixels_per_point,
         };
 
@@ -311,7 +411,7 @@ impl Gfx {
     }
 }
 
-impl CompositorHandler for OverlayEgui {
+impl CompositorHandler for WaylandOverlay {
     fn scale_factor_changed(
         &mut self,
         _: &Connection,
@@ -329,11 +429,7 @@ impl CompositorHandler for OverlayEgui {
     ) {
     }
     fn frame(&mut self, _: &Connection, qh: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {
-        if self.start.elapsed() > RUN {
-            self.exit = true;
-            return;
-        }
-        self.draw(qh);
+        self.tick(qh);
     }
     fn surface_enter(
         &mut self,
@@ -353,7 +449,7 @@ impl CompositorHandler for OverlayEgui {
     }
 }
 
-impl LayerShellHandler for OverlayEgui {
+impl LayerShellHandler for WaylandOverlay {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
         self.exit = true;
     }
@@ -365,18 +461,17 @@ impl LayerShellHandler for OverlayEgui {
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        self.width = NonZeroU32::new(configure.new_size.0).map_or(W, NonZeroU32::get);
-        self.height = NonZeroU32::new(configure.new_size.1).map_or(H, NonZeroU32::get);
-        println!(
-            "overlay_wayland_egui: configure ({}x{})",
-            self.width, self.height
-        );
-        self.ensure_gfx();
-        self.draw(qh);
+        let w = NonZeroU32::new(configure.new_size.0).map_or(self.last_size.0, NonZeroU32::get);
+        let h = NonZeroU32::new(configure.new_size.1).map_or(self.last_size.1, NonZeroU32::get);
+        self.last_size = (w, h);
+        // O primeiro configure precisa renderizar já (sem buffer, o compositor não
+        // emite `frame`); então forçamos o tick ignorando o throttle.
+        self.last_tick = Instant::now() - TICK;
+        self.tick(qh);
     }
 }
 
-impl OutputHandler for OverlayEgui {
+impl OutputHandler for WaylandOverlay {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
@@ -385,19 +480,19 @@ impl OutputHandler for OverlayEgui {
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 }
 
-impl ShmHandler for OverlayEgui {
+impl ShmHandler for WaylandOverlay {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.shm
     }
 }
 
-delegate_registry!(OverlayEgui);
+delegate_registry!(WaylandOverlay);
 
-impl ProvidesRegistryState for OverlayEgui {
+impl ProvidesRegistryState for WaylandOverlay {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
     registry_handlers![OutputState];
 }
 
-smithay_client_toolkit::delegate_dispatch2!(OverlayEgui);
+smithay_client_toolkit::delegate_dispatch2!(WaylandOverlay);
