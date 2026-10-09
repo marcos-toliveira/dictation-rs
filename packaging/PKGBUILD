@@ -2,7 +2,7 @@
 pkgname=dictation-rs
 pkgver=0.1.2
 pkgrel=1
-pkgdesc="Ditado por voz push-to-talk para Linux/X11 com ASR no Groq (reescrita em Rust)"
+pkgdesc="Ditado por voz push-to-talk para Linux (X11/Wayland) com ASR no Groq (reescrita em Rust)"
 arch=('x86_64')
 url="https://github.com/marcos-toliveira/dictation-rs"
 license=('MIT')
@@ -27,9 +27,12 @@ depends=(
 optdepends=(
   'zenity: diálogo para ensinar correção (genérico)'
   'kdialog: diálogo para ensinar correção (KDE)'
-  'xclip: preencher o campo "Errado" do "ensinar correção" com a seleção'
+  'xclip: preencher o campo "Errado" do "ensinar correção" com a seleção (X11)'
   'libpulse: ferramenta pactl para detectar a fonte de áudio padrão'
   'whisper.cpp: transcrição offline (fallback sem rede)'
+  'wl-clipboard: injeção no Wayland (copiar via wl-copy)'
+  'ydotool: injeção no Wayland (digitar/colar via uinput; requer ydotoold)'
+  'kdotool: ancorar o overlay na janela em foco no Wayland (AUR)'
 )
 makedepends=('cargo' 'rust' 'pkgconf' 'alsa-lib')
 provides=('dictation')

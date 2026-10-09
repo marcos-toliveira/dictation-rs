@@ -54,4 +54,19 @@ echo
 echo "Registre o atalho global (Plasma 6 / KGlobalAccel):"
 echo "  bash \"$SRC/set-shortcut.sh\"            # default F8 (ditar) e F9 (ensinar)"
 echo
+if [ "${XDG_SESSION_TYPE:-}" = "wayland" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+    echo "Sessão Wayland detectada — dependências do backend Wayland:"
+    miss=""
+    for b in ydotool wl-copy kdotool kscreen-doctor; do
+        command -v "$b" >/dev/null 2>&1 || miss="$miss $b"
+    done
+    if [ -n "$miss" ]; then
+        echo "  ⚠ faltam:$miss"
+        echo "    sudo pacman -S wl-clipboard ydotool   # kdotool-git (biglinux) ou kdotool (AUR)"
+        echo "    sudo systemctl enable --now ydotoold  # serviço do ydotool (/dev/uinput)"
+    else
+        echo "  ✔ ydotool / wl-clipboard / kdotool / kscreen-doctor presentes"
+    fi
+    echo
+fi
 echo "Teste sem atalho:  dictation start ; fale ; dictation stop"

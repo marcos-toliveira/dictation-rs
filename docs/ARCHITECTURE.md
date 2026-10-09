@@ -63,23 +63,25 @@ Cada capacidade é isolada em traits ou abstrações condicionais (`#[cfg(target
   - Linux: `~/.config/dictation/config.ini`, cofre `~/.config/anubis/groq.env`.
   - Windows: `%APPDATA%\dictation\config.ini`, `%APPDATA%\anubis\groq.env` (ou variável `GROQ_API_KEY`).
 
-## Suporte Wayland (planejado — branch `feat/wayland`)
+## Suporte Wayland (implementado)
 
 Alvo: sessão **Plasma/KWin**. X11 continua o padrão no Linux; o backend é escolhido
 em **runtime** por `dictation_platform::session::is_wayland()`
 (`WAYLAND_DISPLAY`/`XDG_SESSION_TYPE`) — um mesmo binário atende as duas sessões.
 
-| Capacidade | X11 (atual) | Wayland (planejado) |
+| Capacidade | X11 | Wayland (KWin) |
 |---|---|---|
-| Injeção | `xdotool` / `xclip` | `ydotool` (uinput) / `wl-copy` — fase F1 |
-| Geometria (janela em foco/monitor) | `xdotool`/`xrandr` (`ui::x11`) | `kdotool` + `kscreen-doctor` (`ui::kwin`) — fase F3 |
-| Overlay | `override_redirect` + `Tooltip` + `mouse_passthrough` | `zwlr_layer_shell_v1` + input region vazia — fase F4 |
-| Atalhos | KGlobalAccel | KGlobalAccel (já Wayland-safe) |
-| Áudio / bandeja | `ffmpeg`/`cpal` · `ksni` | sem mudança (esperado) |
+| Injeção | `xdotool` / `xclip` | `ydotool` (uinput) / `wl-copy` (`inject.rs`, feature `wayland`) |
+| Geometria (janela em foco/monitor) | `xdotool`/`xrandr` (`ui::x11`) | `kdotool` + `kscreen-doctor` (`ui::kwin`) |
+| Overlay | `override_redirect` + `Tooltip` + `mouse_passthrough` | `zwlr_layer_shell_v1` (camada Overlay, input region vazia) + `egui`/`wgpu` (`ui::overlay_wayland`) |
+| Atalhos | KGlobalAccel | KGlobalAccel (Wayland-safe) |
+| Áudio / bandeja | `ffmpeg`/`cpal` · `ksni` | sem mudança |
 
-A geometria do overlay é acessada via a trait `ui::geometry::GeometryProvider`, para o
-`overlay.rs` não depender do backend concreto. Plano completo: `tasks/WAYLAND-DICTATION-PORT-2026-10-09/`
-(doc de plano) no workspace.
+A geometria do overlay é acessada via a trait `ui::geometry::GeometryProvider`, e a UI
+do badge/prévia é compartilhada (`ui::overlay::content`) entre o backend `eframe`
+(X11/Windows) e o layer-shell (Wayland) — o `overlay` não depende do backend concreto.
+Dependências de runtime no Wayland: `ydotool`, `wl-clipboard`, `kdotool` (+ `ydotoold`).
+Plano e histórico: `tasks/WAYLAND-DICTATION-PORT-2026-10-09/` no workspace.
 
 ## Testes e qualidade
 - unit + **property-based** (`proptest`) para invariantes (máquina de estados, segmentação);
