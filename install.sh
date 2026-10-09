@@ -62,7 +62,7 @@ if [ "${XDG_SESSION_TYPE:-}" = "wayland" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; the
     done
     if [ -n "$miss" ]; then
         echo "  ⚠ faltam:$miss"
-        echo "    sudo pacman -S wl-clipboard ydotool   # kdotool-git (biglinux) ou kdotool (AUR)"
+        echo "    sudo pacman -S wl-clipboard ydotool kscreen   # kdotool-git (biglinux) ou kdotool (AUR)"
         echo "    sudo systemctl enable --now ydotoold  # serviço do ydotool (/dev/uinput)"
     else
         echo "  ✔ ydotool / wl-clipboard / kdotool / kscreen-doctor presentes"

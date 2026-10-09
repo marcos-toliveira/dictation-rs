@@ -33,6 +33,7 @@ optdepends=(
   'wl-clipboard: injeção no Wayland (copiar via wl-copy)'
   'ydotool: injeção no Wayland (digitar/colar via uinput; requer ydotoold)'
   'kdotool: ancorar o overlay na janela em foco no Wayland (AUR)'
+  'kscreen: kscreen-doctor para a geometria de monitores no Wayland'
 )
 makedepends=('cargo' 'rust' 'pkgconf' 'alsa-lib')
 provides=('dictation')

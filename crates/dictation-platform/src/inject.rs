@@ -360,7 +360,14 @@ fn wl_clipboard_paste(payload: &str, initial_delay_ms: u32) -> Result<(), Inject
         .write_all(payload.as_bytes())
         .map_err(|e| InjectError::Failed(format!("wl-copy write: {e}")))?;
     drop(child.stdin.take());
-    let _ = child.wait();
+    let status = child
+        .wait()
+        .map_err(|e| InjectError::Failed(format!("wl-copy wait: {e}")))?;
+    if !status.success() {
+        return Err(InjectError::Failed(format!(
+            "wl-copy saiu com {status} — área de transferência Wayland indisponível?"
+        )));
+    }
 
     // 2) cola no app em foco (Ctrl+V via ydotool/uinput)
     if initial_delay_ms > 0 {
