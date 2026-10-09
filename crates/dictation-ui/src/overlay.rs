@@ -8,11 +8,10 @@
 //! fica estável, já que a âncora é na base).
 
 use crate::anchor;
+use crate::geometry::{self, GeometryProvider};
 use crate::state::SharedUi;
 #[cfg(windows)]
 use crate::win_window as window_helper;
-#[cfg(target_os = "linux")]
-use crate::x11 as window_helper;
 use eframe::egui;
 use std::time::Duration;
 
@@ -33,6 +32,8 @@ pub struct OverlayApp {
     last_win: Option<anchor::Rect>,
     /// Último estado de visibilidade enviado (evita comandos redundantes).
     visible: Option<bool>,
+    /// Fonte de geometria (janela em foco + monitor) da sessão atual.
+    geom: Box<dyn GeometryProvider>,
 }
 
 impl OverlayApp {
@@ -46,6 +47,7 @@ impl OverlayApp {
             last_size: (0.0, 0.0),
             last_win: None,
             visible: None,
+            geom: geometry::provider(),
         }
     }
 }
@@ -165,12 +167,12 @@ impl eframe::App for OverlayApp {
         let t = ctx.input(|i| i.time);
         if t - self.last_reposition > 0.7 {
             self.last_reposition = t;
-            if let Some(win) = window_helper::active_window_rect() {
+            if let Some(win) = self.geom.active_window_rect() {
                 self.last_win = Some(win);
             }
             if let Some(win) = self.last_win {
                 let (cx, cy) = win.center();
-                let monitor = window_helper::monitor_rect_for(cx, cy);
+                let monitor = self.geom.monitor_rect_for(cx, cy);
                 let anchor = if has_text {
                     &self.preview_anchor
                 } else {

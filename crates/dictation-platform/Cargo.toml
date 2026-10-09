@@ -12,6 +12,8 @@ default = ["audio-cpal", "x11"]
 audio-cpal = ["dep:cpal"]
 # injeção/atalhos no X11 (via xdotool; XTest nativo vem depois)
 x11 = []
+# sessão Wayland (injeção via ydotool/wl-copy — fase F1 do port; layer-shell na UI)
+wayland = []
 
 [dependencies]
 dictation-core = { path = "../dictation-core" }
