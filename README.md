@@ -1,6 +1,6 @@
 # dictation-rs
 
-Push-to-talk voice typing for Linux (X11 today; Wayland/Windows planned), rewritten
+Push-to-talk voice typing for Linux (X11 and Wayland) and Windows, rewritten
 in **Rust** from [`dictation`](https://github.com/marcos-toliveira/dictation) (the
 original Python/PySide6 implementation).
 
@@ -8,9 +8,11 @@ Same behaviour as the original — **Groq** transcription (`whisper-large-v3-tur
 local `whisper.cpp` fallback — but with a redesigned core that fixes the bugs seen with
 long dictation and leaves clean extension points for other platforms.
 
-> **Status:** core + Groq + platform + daemon + CLI implemented and tested. The
-> headless path works end-to-end on Linux/X11 (cpal capture → Groq → inject). The GUI
-> (floating REC/preview overlay, tray) and the global hotkeys are the remaining work.
+> **Status:** core + Groq + platform + daemon + CLI implemented and tested. Linux/X11
+> works end-to-end (capture → Groq → inject) with the floating overlay, tray and
+> KGlobalAccel hotkeys. **Wayland (Plasma/KWin)** is implemented — `ydotool`/`wl-copy`
+> injection, KWin geometry (`kdotool`/`kscreen-doctor`) and a layer-shell overlay
+> (egui/wgpu) — and **Windows** is native.
 
 ## Why a rewrite
 
@@ -67,6 +69,22 @@ cargo run -p dictation-daemon --bin dictationd &
 cargo run -p dictation-cli -- toggle      # inicia/para; ao parar, digita no app em foco
 ```
 
+## Running (Linux/Wayland)
+
+O daemon detecta a sessão em runtime (`WAYLAND_DISPLAY`/`XDG_SESSION_TYPE`) e, no
+Wayland, usa os backends nativos. Dependências (Arch/Plasma):
+
+```bash
+sudo pacman -S wl-clipboard ydotool kdotool-git   # kdotool-git está no repo biglinux; no Arch puro é AUR
+sudo systemctl enable --now ydotoold              # serviço do ydotool (/dev/uinput)
+```
+
+- **Injeção**: `clipboard` usa `wl-copy` + `Ctrl+V` (via `ydotool`); `type` usa
+  `ydotool type` (ASCII — texto com acentos cai para o clipboard).
+- **Overlay**: layer-shell (`zwlr_layer_shell_v1`) + `egui`/`wgpu`, ancorado na janela
+  em foco (`kdotool`), click-through e sem roubo de foco.
+- **Atalhos**: `set-shortcut.sh` (KGlobalAccel) funciona no Plasma Wayland.
+
 ## Running (Windows Nativo)
 
 ### Instalação rápida via PowerShell:
@@ -107,7 +125,7 @@ Defina a variável de ambiente `GROQ_API_KEY` ou insira a chave no cofre `%APPDA
 - [x] Global hotkeys (F8/F9) via KGlobalAccel no Linux e `RegisterHotKey` no Windows
 - [x] `teach` (dialog via zenity/kdialog no Linux e InputBox no Windows + CLI) e local whisper.cpp fallback
 - [x] Windows backend nativo (`feat/windows`: cpal WASAPI, SendInput Unicode / arboard clipboard, Named Pipes, RegisterHotKey, overlay sem roubo de foco)
-- [ ] Wayland backend (feature-gated, later — on a Wayland machine)
+- [x] Wayland backend (`feat/wayland`: `ydotool`/`wl-copy` inject, KWin geometry via `kdotool`/`kscreen-doctor`, layer-shell overlay via egui/wgpu)
 
 ## License
 
