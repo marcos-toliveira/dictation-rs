@@ -9,6 +9,7 @@
 
 pub mod inject;
 pub mod mocks;
+pub mod session;
 
 #[cfg(feature = "audio-cpal")]
 pub mod capture;

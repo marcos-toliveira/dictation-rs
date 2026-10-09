@@ -404,6 +404,13 @@ fn main() {
             .init();
     }
 
+    // Sessão gráfica (X11/Wayland): a escolha de backends ocorre em runtime.
+    #[cfg(target_os = "linux")]
+    tracing::info!(
+        session = dictation_platform::session::session_label(),
+        "sessão gráfica detectada"
+    );
+
     let asr = build_asr(&cfg);
     let injector: Arc<dyn TextInjector> = match cfg.inject {
         InjectMode::Stdout => Arc::new(StdoutInjector),
