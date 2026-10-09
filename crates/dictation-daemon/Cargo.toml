@@ -9,7 +9,7 @@ repository.workspace = true
 [dependencies]
 dictation-core = { path = "../dictation-core" }
 dictation-groq = { path = "../dictation-groq" }
-dictation-platform = { path = "../dictation-platform" }
+dictation-platform = { path = "../dictation-platform", features = ["wayland"] }
 dictation-ui = { path = "../dictation-ui" }
 thiserror = { workspace = true }
 tracing = { workspace = true }

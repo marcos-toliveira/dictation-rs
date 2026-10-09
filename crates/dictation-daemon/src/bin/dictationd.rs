@@ -15,6 +15,8 @@ use dictation_platform::capture::CpalCapture;
 #[cfg(target_os = "linux")]
 use dictation_platform::capture::FfmpegCapture;
 use dictation_platform::inject::{PlatformClipboardInjector, PlatformTypeInjector, StdoutInjector};
+#[cfg(target_os = "linux")]
+use dictation_platform::inject::{WlClipboardInjector, YdotoolTypeInjector};
 use dictation_platform::{AudioCapture, TextInjector};
 use dictation_ui::state::{self, SharedUi};
 use dictation_ui::tray::{spawn_tray, TrayAction, TrayHandle};
@@ -236,6 +238,40 @@ fn build_capture(_mode: &str, device: Option<String>) -> Box<dyn AudioCapture> {
     Box::new(c)
 }
 
+/// Escolhe o injetor de texto pela **sessão** (Linux: X11 vs Wayland) e pelo modo.
+///
+/// `inject = clipboard` é o caminho confiável para acentos/Unicode no Wayland
+/// (`wl-copy` + Ctrl+V via `ydotool`); `inject = type` usa `ydotool type`.
+fn build_injector(cfg: &Config) -> Arc<dyn TextInjector> {
+    match cfg.inject {
+        InjectMode::Stdout => Arc::new(StdoutInjector),
+        InjectMode::Clipboard => {
+            #[cfg(target_os = "linux")]
+            if dictation_platform::session::is_wayland() {
+                return Arc::new(
+                    WlClipboardInjector::new().with_trailing_space(cfg.trailing_space),
+                );
+            }
+            Arc::new(PlatformClipboardInjector::new().with_trailing_space(cfg.trailing_space))
+        }
+        InjectMode::Type => {
+            #[cfg(target_os = "linux")]
+            if dictation_platform::session::is_wayland() {
+                return Arc::new(
+                    YdotoolTypeInjector::new()
+                        .with_delay_ms(cfg.type_delay_ms)
+                        .with_trailing_space(cfg.trailing_space),
+                );
+            }
+            Arc::new(
+                PlatformTypeInjector::new()
+                    .with_delay_ms(cfg.type_delay_ms)
+                    .with_trailing_space(cfg.trailing_space),
+            )
+        }
+    }
+}
+
 fn notify(cfg: &Config, title: &str, body: &str) {
     #[cfg(target_os = "linux")]
     if cfg.notify && which("notify-send") {
@@ -412,17 +448,7 @@ fn main() {
     );
 
     let asr = build_asr(&cfg);
-    let injector: Arc<dyn TextInjector> = match cfg.inject {
-        InjectMode::Stdout => Arc::new(StdoutInjector),
-        InjectMode::Clipboard => {
-            Arc::new(PlatformClipboardInjector::new().with_trailing_space(cfg.trailing_space))
-        }
-        InjectMode::Type => Arc::new(
-            PlatformTypeInjector::new()
-                .with_delay_ms(cfg.type_delay_ms)
-                .with_trailing_space(cfg.trailing_space),
-        ),
-    };
+    let injector = build_injector(&cfg);
     let engine = Arc::new(Mutex::new(Engine::new(&cfg, Arc::clone(&asr), injector)));
     let opts = engine.lock().unwrap().options();
     let ui = state::shared();
