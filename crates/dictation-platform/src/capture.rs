@@ -6,7 +6,7 @@
 
 use crate::{AudioCapture, CaptureError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 
 /// Taxa de amostragem alvo do pipeline.
 pub const TARGET_RATE: u32 = 16_000;
@@ -136,7 +136,15 @@ impl AudioCapture for CpalCapture {
     }
 
     fn recv(&mut self) -> Option<Vec<i16>> {
-        self.rx.as_ref()?.recv().ok()
+        // Espera **limitada**: se o stream parar de entregar (troca/erro de dispositivo,
+        // callback morto), não bloqueia para sempre — devolve um bloco vazio para o laço
+        // do daemon rechecar a flag de `stop` e encerrar.
+        let rx = self.rx.as_ref()?;
+        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(block) => Some(block),
+            Err(RecvTimeoutError::Timeout) => Some(Vec::new()),
+            Err(RecvTimeoutError::Disconnected) => None,
+        }
     }
 
     fn stop(&mut self) -> Result<(), CaptureError> {

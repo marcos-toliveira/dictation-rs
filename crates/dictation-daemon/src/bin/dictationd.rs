@@ -115,9 +115,11 @@ impl Daemon {
             }
             while !stop.load(Ordering::SeqCst) {
                 match cap.recv() {
-                    Some(block) => {
+                    // Bloco vazio = espera limitada expirou (só recheca o `stop`).
+                    Some(block) if !block.is_empty() => {
                         engine.lock().unwrap().push_audio(&block);
                     }
+                    Some(_) => {}
                     // Fonte encerrou (ex.: ffmpeg morreu) — sai do loop (o watchdog finaliza).
                     None => break,
                 }
