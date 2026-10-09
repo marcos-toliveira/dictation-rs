@@ -297,7 +297,8 @@ fn default_candidates() -> Vec<String> {
 pub struct FfmpegCapture {
     source: Option<String>,
     child: Option<std::process::Child>,
-    reader: Option<std::io::BufReader<std::process::ChildStdout>>,
+    rx: Option<Receiver<Vec<i16>>>,
+    reader: Option<std::thread::JoinHandle<()>>,
 }
 
 #[cfg(target_os = "linux")]
@@ -306,6 +307,7 @@ impl FfmpegCapture {
         Self {
             source: None,
             child: None,
+            rx: None,
             reader: None,
         }
     }
@@ -381,21 +383,49 @@ impl AudioCapture for FfmpegCapture {
             .stdout
             .take()
             .ok_or_else(|| CaptureError::Stream("ffmpeg sem stdout".into()))?;
-        self.reader = Some(std::io::BufReader::new(out));
+
+        // Thread leitora dedicada: o `read` do pipe pode bloquear, então fica **fora**
+        // da thread de captura; esta consome com espera limitada (`recv_timeout`).
+        // Quando o ffmpeg morre/é morto, o `read` retorna EOF e a thread encerra.
+        let (tx, rx) = mpsc::channel::<Vec<i16>>();
+        let reader = std::thread::spawn(move || {
+            use std::io::Read;
+            let mut reader = std::io::BufReader::new(out);
+            let mut buf = vec![0u8; 3200]; // 100 ms @ 16 kHz mono s16le
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break, // EOF: ffmpeg encerrou
+                    Ok(n) => {
+                        let mut block = buf[..n].to_vec();
+                        if block.len() % 2 == 1 {
+                            block.pop(); // descarta byte ímpar
+                        }
+                        let (pairs, _) = block.as_chunks::<2>();
+                        let samples: Vec<i16> =
+                            pairs.iter().map(|p| i16::from_le_bytes(*p)).collect();
+                        if tx.send(samples).is_err() {
+                            break; // receptor sumiu
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        self.reader = Some(reader);
+        self.rx = Some(rx);
         self.child = Some(child);
         Ok(())
     }
 
     fn recv(&mut self) -> Option<Vec<i16>> {
-        use std::io::Read;
-        let mut buf = vec![0u8; 3200]; // 100 ms @ 16 kHz mono s16le
-        let n = self.reader.as_mut()?.read(&mut buf).ok()?;
-        if n < 2 {
-            return None;
+        // Espera limitada (ver `CpalCapture::recv`): o ffmpeg pode ficar vivo sem
+        // produzir stdout; um bloco vazio deixa o daemon rechecar o `stop`.
+        let rx = self.rx.as_ref()?;
+        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(block) => Some(block),
+            Err(RecvTimeoutError::Timeout) => Some(Vec::new()),
+            Err(RecvTimeoutError::Disconnected) => None,
         }
-        buf.truncate(n - (n % 2));
-        let (pairs, _) = buf.as_chunks::<2>();
-        Some(pairs.iter().map(|p| i16::from_le_bytes(*p)).collect())
     }
 
     fn stop(&mut self) -> Result<(), CaptureError> {
@@ -403,7 +433,11 @@ impl AudioCapture for FfmpegCapture {
             let _ = c.kill();
             let _ = c.wait();
         }
-        self.reader = None;
+        self.rx = None;
+        if let Some(h) = self.reader.take() {
+            // O kill acima fecha o pipe → `read` retorna EOF → a thread encerra.
+            let _ = h.join();
+        }
         Ok(())
     }
 }
@@ -447,5 +481,20 @@ mod tests {
                 let _ = cap.stop();
             }
         }
+    }
+
+    #[test]
+    fn cpal_recv_timeout_vazio_e_desconexao_none() {
+        // Sender vivo, sem enviar: a espera limitada expira → bloco vazio.
+        let (tx, rx) = mpsc::channel::<Vec<i16>>();
+        let mut cap = CpalCapture {
+            stream: None,
+            rx: Some(rx),
+            device_name: None,
+        };
+        assert_eq!(cap.recv(), Some(Vec::new()));
+        // Sender dropado: canal desconectado → None (fim da fonte).
+        drop(tx);
+        assert_eq!(cap.recv(), None);
     }
 }
