@@ -30,6 +30,9 @@ pub trait AudioCapture {
     /// Abre o dispositivo e começa a capturar.
     fn start(&mut self) -> Result<(), CaptureError>;
     /// Bloqueia até o próximo bloco de samples (ou `None` no fim).
+    ///
+    /// A espera deve ser **limitada**: um bloco vazio significa "sem dados ainda"
+    /// (o chamador recheca seu estado e tenta de novo), e `None` significa fim da fonte.
     fn recv(&mut self) -> Option<Vec<i16>>;
     /// Encerra a captura.
     fn stop(&mut self) -> Result<(), CaptureError>;
