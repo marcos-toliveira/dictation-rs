@@ -7,6 +7,8 @@ use eframe::egui;
 
 pub mod anchor;
 pub mod geometry;
+#[cfg(target_os = "linux")]
+pub mod kwin;
 pub mod overlay;
 pub mod state;
 pub mod tray;

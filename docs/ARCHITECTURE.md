@@ -72,7 +72,7 @@ em **runtime** por `dictation_platform::session::is_wayland()`
 | Capacidade | X11 (atual) | Wayland (planejado) |
 |---|---|---|
 | Injeção | `xdotool` / `xclip` | `ydotool` (uinput) / `wl-copy` — fase F1 |
-| Geometria (janela em foco/monitor) | `xdotool`/`xrandr` (`ui::x11`) | KWin D-Bus — fase F3 |
+| Geometria (janela em foco/monitor) | `xdotool`/`xrandr` (`ui::x11`) | `kdotool` + `kscreen-doctor` (`ui::kwin`) — fase F3 |
 | Overlay | `override_redirect` + `Tooltip` + `mouse_passthrough` | `zwlr_layer_shell_v1` + input region vazia — fase F4 |
 | Atalhos | KGlobalAccel | KGlobalAccel (já Wayland-safe) |
 | Áudio / bandeja | `ffmpeg`/`cpal` · `ksni` | sem mudança (esperado) |

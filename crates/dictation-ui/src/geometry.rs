@@ -1,9 +1,9 @@
 //! Abstração da geometria do overlay: **janela em foco** + **monitor**.
 //!
-//! O overlay depende só desta trait — nunca do backend concreto. Hoje há um backend
-//! por SO (Linux→[`crate::x11`], Windows→[`crate::win_window`]); a fase F3 do port
-//! Wayland adiciona um `KWinGeometry` (KWin D-Bus) e o [`provider`] passa a escolhê-lo
-//! quando a sessão for Wayland (`dictation_platform::session::is_wayland`).
+//! O overlay depende só desta trait — nunca do backend concreto. Há um backend por
+//! SO/sessão: Linux/X11 → [`crate::x11`], Linux/Wayland → [`crate::kwin`],
+//! Windows → [`crate::win_window`]. O [`provider`] escolhe em runtime pela sessão
+//! (`dictation_platform::session::is_wayland`).
 //!
 //! Isolar agora evita que o `overlay.rs` fique acoplado ao backend — que é o ponto do F0.
 
@@ -58,8 +58,14 @@ impl GeometryProvider for NativeGeometry {
 
 /// Provider de geometria para a **sessão atual**.
 ///
-/// **F0**: o backend nativo do SO. A fase F3 insere, aqui, a seleção por
-/// `dictation_platform::session::is_wayland()` devolvendo o backend KWin no Linux.
+/// No Linux, escolhe em **runtime**: **Wayland → [`crate::kwin::KWinGeometry`]**
+/// (`kdotool` + `kscreen-doctor`); senão o backend nativo X11. No Windows, o nativo.
 pub fn provider() -> Box<dyn GeometryProvider> {
+    #[cfg(target_os = "linux")]
+    {
+        if dictation_platform::session::is_wayland() {
+            return Box::new(crate::kwin::KWinGeometry);
+        }
+    }
     Box::new(NativeGeometry)
 }
