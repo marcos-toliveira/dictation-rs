@@ -5,8 +5,9 @@
 //! **click-through** (input region vazia), e renderiza a **mesma UI** do
 //! [`crate::overlay::content`] com `egui-wgpu`.
 //!
-//! O posicionamento sobre a janela em foco é emulado com âncora `TOP|LEFT` +
-//! *margins* (o layer-shell ancora a margens, não a coordenadas arbitrárias).
+//! Posicionamento: o layer-shell ancora a **margens de um `wl_output`**, não a
+//! coordenadas globais. Por isso o overlay é (re)criado no `wl_output` que contém a
+//! janela em foco e as margens são convertidas para o espaço **local do output**.
 
 use std::ffi::c_void;
 use std::num::NonZeroU32;
@@ -41,9 +42,7 @@ use crate::anchor;
 use crate::geometry::GeometryProvider;
 use crate::state::SharedUi;
 
-/// Intervalo mínimo entre recomputos de estado/posição.
-const TICK: Duration = Duration::from_millis(60);
-/// Reancoragem na janela em foco (mais espaçada que o tick).
+/// Reancoragem na janela em foco (o ritmo de render é o vsync do compositor).
 const REPOSITION: Duration = Duration::from_millis(500);
 
 /// Roda o overlay Wayland. **Bloqueia** (chamar na thread principal).
@@ -87,28 +86,22 @@ pub fn run_overlay(state: SharedUi, indicator_anchor: String, preview_anchor: St
         }
     };
 
-    let surface = compositor.create_surface(&qh);
-    let surface_ptr = surface.id().as_ptr() as *mut c_void;
-    let layer =
-        layer_shell.create_layer_surface(&qh, surface, Layer::Overlay, Some("dictation-rec"), None);
-    // Ancorado no canto superior esquerdo + margins = posição absoluta (emulada).
-    layer.set_anchor(Anchor::TOP | Anchor::LEFT);
-    layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+    let output_state = OutputState::new(&globals, &qh);
     let size = crate::overlay::overlay_size(false, "");
-    layer.set_size(size.x as u32, size.y as u32);
-
-    // Click-through: input region vazia.
-    if let Ok(region) = Region::new(&compositor) {
-        layer
-            .wl_surface()
-            .set_input_region(Some(region.wl_region()));
-    }
-    layer.commit();
+    let (layer, surface_ptr) = create_layer(
+        &compositor,
+        &layer_shell,
+        &qh,
+        None,
+        (size.x as u32, size.y as u32),
+    );
 
     let mut app = WaylandOverlay {
         registry_state: RegistryState::new(&globals),
-        output_state: OutputState::new(&globals, &qh),
+        output_state,
         shm,
+        compositor,
+        layer_shell,
         state,
         indicator_anchor,
         preview_anchor,
@@ -122,6 +115,8 @@ pub fn run_overlay(state: SharedUi, indicator_anchor: String, preview_anchor: St
         display_ptr,
         surface_ptr,
         layer,
+        output: None,
+        output_origin: (0, 0),
         gfx: None,
         exit: false,
     };
@@ -135,10 +130,43 @@ pub fn run_overlay(state: SharedUi, indicator_anchor: String, preview_anchor: St
     }
 }
 
+/// Cria uma `wl_surface` + `zwlr_layer_surface_v1` (camada Overlay, ancorada em
+/// `TOP|LEFT`, sem foco, click-through) no `output` dado. Devolve a `LayerSurface`
+/// e o ponteiro da `wl_surface` (para a surface `wgpu`).
+fn create_layer(
+    compositor: &CompositorState,
+    layer_shell: &LayerShell,
+    qh: &QueueHandle<WaylandOverlay>,
+    output: Option<&wl_output::WlOutput>,
+    (w, h): (u32, u32),
+) -> (LayerSurface, *mut c_void) {
+    let surface = compositor.create_surface(qh);
+    let surface_ptr = surface.id().as_ptr() as *mut c_void;
+    let layer = layer_shell.create_layer_surface(
+        qh,
+        surface,
+        Layer::Overlay,
+        Some("dictation-rec"),
+        output,
+    );
+    layer.set_anchor(Anchor::TOP | Anchor::LEFT);
+    layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+    layer.set_size(w, h);
+    if let Ok(region) = Region::new(compositor) {
+        layer
+            .wl_surface()
+            .set_input_region(Some(region.wl_region()));
+    }
+    layer.commit();
+    (layer, surface_ptr)
+}
+
 struct WaylandOverlay {
     registry_state: RegistryState,
     output_state: OutputState,
     shm: Shm,
+    compositor: CompositorState,
+    layer_shell: LayerShell,
     state: SharedUi,
     indicator_anchor: String,
     preview_anchor: String,
@@ -152,22 +180,65 @@ struct WaylandOverlay {
     display_ptr: *mut c_void,
     surface_ptr: *mut c_void,
     layer: LayerSurface,
+    /// `wl_output` em que a superfície está ancorada (e a origem lógica dele).
+    output: Option<wl_output::WlOutput>,
+    output_origin: (i32, i32),
     gfx: Option<Gfx>,
     exit: bool,
 }
 
 impl WaylandOverlay {
-    /// Um passo do overlay: lê o estado, ajusta tamanho/posição e desenha.
+    /// `wl_output` que contém o ponto global `(cx, cy)`, se conhecido.
+    fn output_for_point(&self, cx: f32, cy: f32) -> Option<wl_output::WlOutput> {
+        for out in self.output_state.outputs() {
+            if let Some(info) = self.output_state.info(&out) {
+                if let (Some(p), Some(s)) = (info.logical_position, info.logical_size) {
+                    if cx >= p.0 as f32
+                        && cx < (p.0 + s.0) as f32
+                        && cy >= p.1 as f32
+                        && cy < (p.1 + s.1) as f32
+                    {
+                        return Some(out);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Recria a superfície no `output` alvo (o layer-shell não permite trocar de output
+    /// numa superfície existente). A surface `wgpu` também é recriada.
+    fn recreate_layer(&mut self, qh: &QueueHandle<Self>, output: Option<wl_output::WlOutput>) {
+        self.gfx = None; // libera a surface wgpu (antes de destruir a wl_surface antiga)
+        self.output_origin = output
+            .as_ref()
+            .and_then(|o| self.output_state.info(o))
+            .and_then(|i| i.logical_position)
+            .unwrap_or((0, 0));
+        let (layer, surface_ptr) = create_layer(
+            &self.compositor,
+            &self.layer_shell,
+            qh,
+            output.as_ref(),
+            self.last_size,
+        );
+        self.layer = layer;
+        self.surface_ptr = surface_ptr;
+        self.output = output;
+        self.last_pos = (i32::MIN, i32::MIN);
+    }
+
+    /// Um passo do overlay: lê o estado, ajusta output/tamanho/posição e desenha.
     fn tick(&mut self, qh: &QueueHandle<Self>) {
-        // Mantém o loop acordado.
+        // O callback de frame só é armado quando a superfície é **commitada** (o
+        // `present()` da wgpu faz isso). Por isso este caminho SEMPRE renderiza — não
+        // pode retornar antes do commit, senão o loop de eventos congela.
         self.layer
             .wl_surface()
             .frame(qh, FrameCallbackData(self.layer.wl_surface().clone()));
 
         let now = Instant::now();
-        if now.duration_since(self.last_tick) < TICK {
-            return;
-        }
+        let dt = now.duration_since(self.last_tick).as_secs_f32();
         self.last_tick = now;
 
         let (recording, transcribing, preview) = {
@@ -175,19 +246,17 @@ impl WaylandOverlay {
             (s.recording, s.transcribing, s.preview.trim().to_string())
         };
         let visible = recording || transcribing || !preview.is_empty();
-        self.phase += 0.14;
+        self.phase += 2.3 * dt; // ~0.14 por 60 ms (independente do fps)
         let pulse = 0.5 + 0.5 * self.phase.sin();
 
         let size = crate::overlay::overlay_size(recording, &preview);
         let (w, h) = (size.x as u32, size.y as u32);
-        let mut needs_configure = false;
         if (w, h) != self.last_size {
             self.last_size = (w, h);
             self.layer.set_size(w, h);
-            needs_configure = true;
         }
 
-        // Reancora na janela em foco (com guarda anti-loop).
+        // Reancora na janela em foco (com guarda anti-loop) e escolhe o output.
         if visible && now.duration_since(self.last_reposition) >= REPOSITION {
             self.last_reposition = now;
             if let Some(win) = self.geom.active_window_rect() {
@@ -204,18 +273,25 @@ impl WaylandOverlay {
                     &self.preview_anchor
                 };
                 let (px, py) = anchor::anchor_pos(anchor, win, monitor, (size.x, size.y));
-                let pos = (px.max(0.0) as i32, py.max(0.0) as i32);
+
+                // Margens são relativas ao output: garante a superfície no output certo
+                // e converte as coordenadas globais para locais do output.
+                let target = self.output_for_point(cx, cy);
+                if target != self.output {
+                    self.recreate_layer(qh, target);
+                }
+                let (ox, oy) = self.output_origin;
+                let pos = (
+                    (px - ox as f32).max(0.0) as i32,
+                    (py - oy as f32).max(0.0) as i32,
+                );
                 if pos != self.last_pos {
                     self.last_pos = pos;
                     self.layer.set_margin(pos.1, 0, 0, pos.0);
-                    needs_configure = true;
                 }
             }
         }
-
-        if needs_configure {
-            self.layer.commit();
-        }
+        self.layer.commit();
 
         // Inicializa a GPU na primeira vez (precisa da superfície já criada).
         if self.gfx.is_none() {
@@ -464,9 +540,6 @@ impl LayerShellHandler for WaylandOverlay {
         let w = NonZeroU32::new(configure.new_size.0).map_or(self.last_size.0, NonZeroU32::get);
         let h = NonZeroU32::new(configure.new_size.1).map_or(self.last_size.1, NonZeroU32::get);
         self.last_size = (w, h);
-        // O primeiro configure precisa renderizar já (sem buffer, o compositor não
-        // emite `frame`); então forçamos o tick ignorando o throttle.
-        self.last_tick = Instant::now() - TICK;
         self.tick(qh);
     }
 }
