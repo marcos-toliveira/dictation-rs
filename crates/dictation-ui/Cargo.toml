@@ -8,10 +8,22 @@ repository.workspace = true
 
 [features]
 # Sessão Wayland (overlay via layer-shell — fase F4 do port). X11 segue o padrão no Linux.
-wayland = ["dep:smithay-client-toolkit", "dep:wayland-client"]
+wayland = [
+    "dep:smithay-client-toolkit",
+    "dep:wayland-client",
+    "dep:wayland-backend",
+    "dep:wgpu",
+    "dep:egui-wgpu",
+    "dep:raw-window-handle",
+    "dep:pollster",
+]
 
 [[example]]
 name = "overlay_wayland_spike"
+required-features = ["wayland"]
+
+[[example]]
+name = "overlay_wayland_egui"
 required-features = ["wayland"]
 
 [dependencies]
@@ -24,6 +36,11 @@ serde_json = "1"
 tracing = { workspace = true }
 smithay-client-toolkit = { version = "0.21", optional = true }
 wayland-client = { version = "0.31", optional = true }
+wayland-backend = { version = "0.3", optional = true, features = ["client_system"] }
+wgpu = { version = "30", optional = true }
+egui-wgpu = { version = "0.36", optional = true, default-features = false }
+raw-window-handle = { version = "0.6", optional = true }
+pollster = { version = "1", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3", features = ["blocking"] }
