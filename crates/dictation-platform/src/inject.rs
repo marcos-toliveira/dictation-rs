@@ -28,30 +28,44 @@ pub fn build_injector(
     trailing_space: bool,
     type_delay_ms: u32,
 ) -> Box<dyn TextInjector> {
-    match mode {
-        InjectMode::Stdout => Box::new(StdoutInjector),
-        InjectMode::Clipboard => {
-            #[cfg(all(target_os = "linux", feature = "wayland"))]
-            if crate::session::is_wayland() {
-                return Box::new(WlClipboardInjector::new().with_trailing_space(trailing_space));
+    // Wayland (Linux): injetores via `ydotool`/`wl-copy`.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    if crate::session::is_wayland() {
+        return match mode {
+            InjectMode::Stdout => Box::new(StdoutInjector),
+            InjectMode::Clipboard => {
+                Box::new(WlClipboardInjector::new().with_trailing_space(trailing_space))
             }
-            Box::new(PlatformClipboardInjector::new().with_trailing_space(trailing_space))
-        }
-        InjectMode::Type => {
-            #[cfg(all(target_os = "linux", feature = "wayland"))]
-            if crate::session::is_wayland() {
-                return Box::new(
-                    YdotoolTypeInjector::new()
-                        .with_delay_ms(type_delay_ms)
-                        .with_trailing_space(trailing_space),
-                );
+            InjectMode::Type => Box::new(
+                YdotoolTypeInjector::new()
+                    .with_delay_ms(type_delay_ms)
+                    .with_trailing_space(trailing_space),
+            ),
+        };
+    }
+
+    // Backends nativos (X11/Windows), quando a feature correspondente está ligada.
+    #[cfg(any(windows, feature = "x11"))]
+    {
+        match mode {
+            InjectMode::Stdout => Box::new(StdoutInjector),
+            InjectMode::Clipboard => {
+                Box::new(PlatformClipboardInjector::new().with_trailing_space(trailing_space))
             }
-            Box::new(
+            InjectMode::Type => Box::new(
                 PlatformTypeInjector::new()
                     .with_delay_ms(type_delay_ms)
                     .with_trailing_space(trailing_space),
-            )
+            ),
         }
+    }
+
+    // Sem backend nativo compilado (ex.: `dictation-ui` usa `default-features=false`):
+    // cai para stdout, sem quebrar o build.
+    #[cfg(not(any(windows, feature = "x11")))]
+    {
+        let _ = (mode, trailing_space, type_delay_ms);
+        Box::new(StdoutInjector)
     }
 }
 
