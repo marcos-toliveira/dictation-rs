@@ -56,14 +56,24 @@ impl GeometryProvider for NativeGeometry {
     }
 }
 
+/// O executável `name` está no `PATH`?
+#[cfg(target_os = "linux")]
+fn command_exists(name: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(name).is_file()))
+        .unwrap_or(false)
+}
+
 /// Provider de geometria para a **sessão atual**.
 ///
-/// No Linux, escolhe em **runtime**: **Wayland → [`crate::kwin::KWinGeometry`]**
-/// (`kdotool` + `kscreen-doctor`); senão o backend nativo X11. No Windows, o nativo.
+/// No Linux, escolhe em **runtime**: **Wayland com `kdotool` → [`crate::kwin::KWinGeometry`]**
+/// (`kdotool` + `kscreen-doctor`); senão o backend nativo X11 (também vale no XWayland). No Windows, o nativo.
 pub fn provider() -> Box<dyn GeometryProvider> {
     #[cfg(target_os = "linux")]
     {
-        if dictation_platform::session::is_wayland() {
+        // KWin (Plasma) só com `kdotool`; sem ele (ex.: GNOME) o overlay roda em
+        // XWayland e usa a geometria X11 (monitores/tela; a janela ativa fica `None`).
+        if dictation_platform::session::is_wayland() && command_exists("kdotool") {
             return Box::new(crate::kwin::KWinGeometry);
         }
     }

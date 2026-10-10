@@ -52,6 +52,11 @@ impl OverlayApp {
     }
 }
 
+/// Retângulo onde o overlay se ancora: a janela ativa, se conhecida; senão a tela.
+fn anchor_target(win: Option<anchor::Rect>, screen: impl FnOnce() -> anchor::Rect) -> anchor::Rect {
+    win.unwrap_or_else(screen)
+}
+
 /// Mostra o fim do texto (o mais recente), limitado a `max` caracteres.
 fn tail(text: &str, max: usize) -> String {
     let count = text.chars().count();
@@ -186,17 +191,17 @@ impl eframe::App for OverlayApp {
             if let Some(win) = self.geom.active_window_rect() {
                 self.last_win = Some(win);
             }
-            if let Some(win) = self.last_win {
-                let (cx, cy) = win.center();
-                let monitor = self.geom.monitor_rect_for(cx, cy);
-                let anchor = if has_text {
-                    &self.preview_anchor
-                } else {
-                    &self.indicator_anchor
-                };
-                let (px, py) = anchor::anchor_pos(anchor, win, monitor, (size.x, size.y));
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(px, py)));
-            }
+            // Sem janela ativa conhecida (GNOME/Wayland não a expõe), ancora na tela.
+            let win = anchor_target(self.last_win, || self.geom.monitor_rect_for(0.0, 0.0));
+            let (cx, cy) = win.center();
+            let monitor = self.geom.monitor_rect_for(cx, cy);
+            let anchor = if has_text {
+                &self.preview_anchor
+            } else {
+                &self.indicator_anchor
+            };
+            let (px, py) = anchor::anchor_pos(anchor, win, monitor, (size.x, size.y));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(px, py)));
         }
 
         ctx.request_repaint_after(Duration::from_millis(60));
@@ -205,7 +210,21 @@ impl eframe::App for OverlayApp {
 
 #[cfg(test)]
 mod tests {
-    use super::tail;
+    use super::{anchor_target, tail};
+    use crate::anchor::Rect;
+
+    #[test]
+    fn anchor_prefers_active_window() {
+        let win = Rect::new(10.0, 20.0, 800.0, 600.0);
+        let t = anchor_target(Some(win), || panic!("nao deve consultar a tela"));
+        assert_eq!(t, win);
+    }
+
+    #[test]
+    fn anchor_falls_back_to_screen() {
+        let screen = Rect::new(0.0, 0.0, 1920.0, 1080.0);
+        assert_eq!(anchor_target(None, || screen), screen);
+    }
 
     #[test]
     fn tail_keeps_short_text() {

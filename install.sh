@@ -59,6 +59,7 @@ if [ "${XDG_SESSION_TYPE:-}" = "wayland" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; the
     need="ydotool wl-copy"
     case "${XDG_CURRENT_DESKTOP:-}" in
         *KDE*) need="$need kdotool kscreen-doctor" ;;  # geometria/overlay só no KWin
+        *GNOME*) need="$need xdotool xrandr" ;;        # overlay via XWayland (geometria X11)
     esac
     miss=""
     for b in $need; do
@@ -67,14 +68,14 @@ if [ "${XDG_SESSION_TYPE:-}" = "wayland" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; the
     if [ -n "$miss" ]; then
         echo "  ⚠ faltam:$miss"
         echo "    Arch:   sudo pacman -S wl-clipboard ydotool kscreen   # kdotool-git (biglinux) ou kdotool (AUR)"
-        echo "    Ubuntu: sudo apt install wl-clipboard ydotool"
+        echo "    Ubuntu: sudo apt install wl-clipboard ydotool xdotool x11-xserver-utils"
         echo "    sudo systemctl enable --now ydotoold  # serviço do ydotool (/dev/uinput)"
     else
         echo "  ✔ dependências presentes: $need"
     fi
     case "${XDG_CURRENT_DESKTOP:-}" in
-        *GNOME*) echo "  Nota: o GNOME não tem wlr-layer-shell, então não há overlay flutuante;" \
-                      "o estado de gravação aparece no ícone da bandeja." ;;
+        *GNOME*) echo "  Nota: o GNOME não tem wlr-layer-shell; o overlay REC roda em XWayland" \
+                      "(janela não gerenciada, sem roubar foco) e o ícone da bandeja também indica a gravação." ;;
     esac
     echo
 fi
