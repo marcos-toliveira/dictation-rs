@@ -75,7 +75,7 @@ O daemon detecta a sessão em runtime (`WAYLAND_DISPLAY`/`XDG_SESSION_TYPE`) e, 
 Wayland, usa os backends nativos. Dependências (Arch/Plasma):
 
 ```bash
-sudo pacman -S wl-clipboard ydotool kdotool-git   # kdotool-git está no repo biglinux; no Arch puro é AUR
+sudo pacman -S wl-clipboard ydotool kscreen kdotool-git   # kdotool-git está no repo biglinux; no Arch puro é AUR
 sudo systemctl enable --now ydotoold              # serviço do ydotool (/dev/uinput)
 ```
 

@@ -80,7 +80,8 @@ em **runtime** por `dictation_platform::session::is_wayland()`
 A geometria do overlay é acessada via a trait `ui::geometry::GeometryProvider`, e a UI
 do badge/prévia é compartilhada (`ui::overlay::content`) entre o backend `eframe`
 (X11/Windows) e o layer-shell (Wayland) — o `overlay` não depende do backend concreto.
-Dependências de runtime no Wayland: `ydotool`, `wl-clipboard`, `kdotool` (+ `ydotoold`).
+Dependências de runtime no Wayland: `ydotool` (+ `ydotoold`), `wl-clipboard`,
+`kdotool` e `kscreen` (provê `kscreen-doctor`).
 Plano e histórico: `tasks/WAYLAND-DICTATION-PORT-2026-10-09/` no workspace.
 
 ## Testes e qualidade

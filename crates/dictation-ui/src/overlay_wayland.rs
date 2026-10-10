@@ -118,6 +118,7 @@ pub fn run_overlay(state: SharedUi, indicator_anchor: String, preview_anchor: St
         output: None,
         output_origin: (0, 0),
         gfx: None,
+        awaiting_configure: true,
         exit: false,
     };
 
@@ -184,6 +185,8 @@ struct WaylandOverlay {
     output: Option<wl_output::WlOutput>,
     output_origin: (i32, i32),
     gfx: Option<Gfx>,
+    /// `true` enquanto a superfície (re)criada ainda não recebeu o `configure` inicial.
+    awaiting_configure: bool,
     exit: bool,
 }
 
@@ -210,6 +213,7 @@ impl WaylandOverlay {
     /// numa superfície existente). A surface `wgpu` também é recriada.
     fn recreate_layer(&mut self, qh: &QueueHandle<Self>, output: Option<wl_output::WlOutput>) {
         self.gfx = None; // libera a surface wgpu (antes de destruir a wl_surface antiga)
+        self.awaiting_configure = true; // só renderiza após o configure da nova superfície
         self.output_origin = output
             .as_ref()
             .and_then(|o| self.output_state.info(o))
@@ -230,6 +234,12 @@ impl WaylandOverlay {
 
     /// Um passo do overlay: lê o estado, ajusta output/tamanho/posição e desenha.
     fn tick(&mut self, qh: &QueueHandle<Self>) {
+        // Layer-shell exige: commit inicial vazio → esperar o `configure` → só então
+        // anexar buffer. Sem isto, uma superfície recém-criada/recriada renderizaria
+        // antes do configure (risco de erro de protocolo).
+        if self.awaiting_configure {
+            return;
+        }
         // O callback de frame só é armado quando a superfície é **commitada** (o
         // `present()` da wgpu faz isso). Por isso este caminho SEMPRE renderiza — não
         // pode retornar antes do commit, senão o loop de eventos congela.
@@ -586,6 +596,7 @@ impl LayerShellHandler for WaylandOverlay {
         let w = NonZeroU32::new(configure.new_size.0).map_or(self.last_size.0, NonZeroU32::get);
         let h = NonZeroU32::new(configure.new_size.1).map_or(self.last_size.1, NonZeroU32::get);
         self.last_size = (w, h);
+        self.awaiting_configure = false;
         self.tick(qh);
     }
 }
