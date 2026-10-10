@@ -106,7 +106,14 @@ struct KscreenOutput {
     enabled: bool,
     connected: bool,
     pos: KscreenPoint,
-    size: KscreenSize,
+    /// Tamanho do **modo** (pixels de dispositivo). A área lógica é `size / scale`.
+    #[serde(default)]
+    size: Option<KscreenSize>,
+    #[serde(default)]
+    scale: Option<f32>,
+    /// Alguns `kscreen` expõem a geometria lógica pronta; quando existe, tem prioridade.
+    #[serde(default)]
+    geometry: Option<KscreenGeometry>,
 }
 
 #[derive(serde::Deserialize)]
@@ -119,6 +126,33 @@ struct KscreenPoint {
 struct KscreenSize {
     width: f32,
     height: f32,
+}
+
+#[derive(serde::Deserialize)]
+struct KscreenGeometry {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+impl KscreenOutput {
+    /// Geometria **lógica** (área de trabalho) do output, em coordenadas do compositor.
+    ///
+    /// `kscreen-doctor` não tem `geometry` em todas as versões; nesse caso usa `size`
+    /// (pixels do modo) dividido por `scale` — `size` **não** é a medida física em mm
+    /// (essa é `sizeMM`).
+    fn rect(&self) -> Option<Rect> {
+        if let Some(g) = &self.geometry {
+            if g.width > 0.0 && g.height > 0.0 {
+                return Some(Rect::new(g.x, g.y, g.width, g.height));
+            }
+        }
+        let s = self.size.as_ref()?;
+        let scale = self.scale.filter(|s| *s > 0.0).unwrap_or(1.0);
+        let (w, h) = (s.width / scale, s.height / scale);
+        (w > 0.0 && h > 0.0).then(|| Rect::new(self.pos.x, self.pos.y, w, h))
+    }
 }
 
 /// Monitores ativos via `kscreen-doctor -j`.
@@ -135,8 +169,8 @@ pub fn parse_kscreen_monitors(json: &str) -> Option<Vec<Rect>> {
     Some(
         root.outputs
             .into_iter()
-            .filter(|o| o.enabled && o.connected && o.size.width > 0.0 && o.size.height > 0.0)
-            .map(|o| Rect::new(o.pos.x, o.pos.y, o.size.width, o.size.height))
+            .filter(|o| o.enabled && o.connected)
+            .filter_map(|o| o.rect())
             .collect(),
     )
 }
@@ -167,14 +201,37 @@ mod tests {
     #[test]
     fn parses_kscreen_outputs_filters_inactive() {
         let json = r#"{"outputs":[
-            {"enabled":true,"connected":true,"pos":{"x":0,"y":0},"size":{"width":1920,"height":1080}},
-            {"enabled":false,"connected":true,"pos":{"x":1920,"y":0},"size":{"width":1280,"height":720}},
-            {"enabled":true,"connected":true,"pos":{"x":1920,"y":0},"size":{"width":1280,"height":720}}
+            {"enabled":true,"connected":true,"pos":{"x":0,"y":0},"size":{"width":1920,"height":1080},"scale":1},
+            {"enabled":false,"connected":true,"pos":{"x":1920,"y":0},"size":{"width":1280,"height":720},"scale":1},
+            {"enabled":true,"connected":true,"pos":{"x":1920,"y":0},"size":{"width":1280,"height":720},"scale":1}
         ]}"#;
         let m = parse_kscreen_monitors(json).unwrap();
         assert_eq!(m.len(), 2);
         assert_eq!(m[0], Rect::new(0.0, 0.0, 1920.0, 1080.0));
         assert_eq!(m[1], Rect::new(1920.0, 0.0, 1280.0, 720.0));
+    }
+
+    #[test]
+    fn kscreen_scale_divides_size() {
+        // HiDPI: modo 3840x2160 com scale 2 → área lógica 1920x1080.
+        let json = r#"{"outputs":[{"enabled":true,"connected":true,"pos":{"x":0,"y":0},
+            "size":{"width":3840,"height":2160},"scale":2}]}"#;
+        assert_eq!(
+            parse_kscreen_monitors(json),
+            Some(vec![Rect::new(0.0, 0.0, 1920.0, 1080.0)])
+        );
+    }
+
+    #[test]
+    fn kscreen_geometry_field_wins() {
+        // Quando `geometry` existe, ele tem prioridade sobre `size`/`scale`.
+        let json = r#"{"outputs":[{"enabled":true,"connected":true,"pos":{"x":0,"y":0},
+            "size":{"width":3840,"height":2160},"scale":2,
+            "geometry":{"x":10,"y":20,"width":800,"height":600}}]}"#;
+        assert_eq!(
+            parse_kscreen_monitors(json),
+            Some(vec![Rect::new(10.0, 20.0, 800.0, 600.0)])
+        );
     }
 
     #[test]

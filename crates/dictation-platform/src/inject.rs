@@ -374,7 +374,10 @@ fn wl_clipboard_paste(payload: &str, initial_delay_ms: u32) -> Result<(), Inject
         std::thread::sleep(std::time::Duration::from_millis(initial_delay_ms as u64));
     }
     let status = std::process::Command::new("ydotool")
-        .args(["key", CTRL_V_KEYCODES])
+        .arg("key")
+        // Cada evento `KEYCODE:ESTADO` precisa ser um argv separado (o CLI não divide
+        // espaços dentro de um argumento).
+        .args(CTRL_V_KEYCODES.split_whitespace())
         .status()
         .map_err(|e| {
             InjectError::Failed(format!(
