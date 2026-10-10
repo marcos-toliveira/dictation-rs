@@ -51,22 +51,31 @@ echo "criado:  $AUTO_DIR/dictationd.desktop"
 echo
 echo "✔ instalado (Rust): $BIN_DIR/dictation"
 echo
-echo "Registre o atalho global (Plasma 6 / KGlobalAccel):"
+echo "Registre o atalho global (KDE Plasma 6 ou GNOME; detectado pelo desktop):"
 echo "  bash \"$SRC/set-shortcut.sh\"            # default F8 (ditar) e F9 (ensinar)"
 echo
 if [ "${XDG_SESSION_TYPE:-}" = "wayland" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
-    echo "Sessão Wayland detectada — dependências do backend Wayland:"
+    echo "Sessão Wayland detectada (${XDG_CURRENT_DESKTOP:-?}) — dependências do backend Wayland:"
+    need="ydotool wl-copy"
+    case "${XDG_CURRENT_DESKTOP:-}" in
+        *KDE*) need="$need kdotool kscreen-doctor" ;;  # geometria/overlay só no KWin
+    esac
     miss=""
-    for b in ydotool wl-copy kdotool kscreen-doctor; do
+    for b in $need; do
         command -v "$b" >/dev/null 2>&1 || miss="$miss $b"
     done
     if [ -n "$miss" ]; then
         echo "  ⚠ faltam:$miss"
-        echo "    sudo pacman -S wl-clipboard ydotool kscreen   # kdotool-git (biglinux) ou kdotool (AUR)"
+        echo "    Arch:   sudo pacman -S wl-clipboard ydotool kscreen   # kdotool-git (biglinux) ou kdotool (AUR)"
+        echo "    Ubuntu: sudo apt install wl-clipboard ydotool"
         echo "    sudo systemctl enable --now ydotoold  # serviço do ydotool (/dev/uinput)"
     else
-        echo "  ✔ ydotool / wl-clipboard / kdotool / kscreen-doctor presentes"
+        echo "  ✔ dependências presentes: $need"
     fi
+    case "${XDG_CURRENT_DESKTOP:-}" in
+        *GNOME*) echo "  Nota: o GNOME não tem wlr-layer-shell, então não há overlay flutuante;" \
+                      "o estado de gravação aparece no ícone da bandeja." ;;
+    esac
     echo
 fi
 echo "Teste sem atalho:  dictation start ; fale ; dictation stop"
