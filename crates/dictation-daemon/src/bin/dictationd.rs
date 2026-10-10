@@ -504,11 +504,19 @@ fn main() {
     #[cfg(target_os = "linux")]
     {
         if dictation_platform::session::is_wayland() {
-            dictation_ui::overlay_wayland::run_overlay(
+            let ran = dictation_ui::overlay_wayland::run_overlay(
                 ui,
                 cfg.indicator_anchor.clone(),
                 cfg.preview_anchor.clone(),
             );
+            if !ran {
+                // Compositor sem layer-shell (ex.: GNOME/Mutter): o estado de gravação
+                // fica só na bandeja. O daemon segue vivo; a saída é pela bandeja/CLI.
+                tracing::warn!("overlay indisponível nesta sessão; seguindo só com a bandeja");
+                loop {
+                    std::thread::park();
+                }
+            }
             return;
         }
     }
