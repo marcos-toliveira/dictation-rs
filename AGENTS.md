@@ -69,6 +69,7 @@ cargo build --release --workspace
 - **Não quebrar o Linux** ao adicionar Windows: tudo atrás de `cfg(windows)`/feature.
 - Segredos **nunca** em argv/commit.
 - Ao mexer no daemon em uso: **avisar antes** de reiniciar (o operador pode estar gravando).
+- Ao abrir um PR: **solicitar a review do Copilot** (`gh pr create --reviewer @copilot` / `gh pr edit <PR> --add-reviewer @copilot`); re-solicitar após push (ele não re-revisa sozinho) e tratar achados **High/Medium** antes do merge.
 
 ## Distribuição
 - **AUR**: `packaging/PKGBUILD` (+ `.SRCINFO`, `.install`). Publicação: ver `packaging/README.md`.
