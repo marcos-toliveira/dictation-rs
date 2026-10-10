@@ -7,8 +7,7 @@ Reescrita em **Rust** do `dictation` (Python/PySide6): ditado por voz **push-to-
 atalho → grava → transcreve no **Groq** → digita no app em foco. Original (referência, **não editar**):
 <https://github.com/marcos-toliveira/dictation>.
 
-- **Alvo atual:** Linux/**X11** (funcionando).
-- **Planejado:** Windows nativo (branch `feat/windows`).
+- **Alvo atual:** Linux/**X11** e **Wayland/Plasma-KWin** (funcionando) e **Windows** nativo.
 
 ## Arquitetura (workspace Cargo)
 | Crate | Papel | Depende de SO? |
@@ -61,6 +60,10 @@ cargo build --release --workspace
 - Overlay **não pode roubar foco** (senão a injeção erra o alvo).
 - O daemon **não pode bloquear** a thread de captura em HTTP (evita travar a captura).
 - **Captura nunca bloqueia indefinidamente**: `recv`/`read` usam espera limitada (`recv_timeout`); a thread de captura é `join()`ada sob o mutex do daemon — bloqueio sem timeout congela o pipe/watchdog e prende o badge REC. Bloco vazio = "sem dados" (recheca `stop`); `None` = fim.
+- **Wayland (Plasma/KWin)** — injeção via `ydotool` (uinput) + `wl-copy`. `ydotool type` cobre **só ASCII** (acento cai para o clipboard) e `ydotool key` exige **cada evento em argv separado** (`29:1 47:1 47:0 29:0`). Requer `ydotoold` e `/dev/uinput`.
+- **Geometria no Wayland**: `kdotool getwindowgeometry` (sem `--shell`) para a janela ativa; `kscreen-doctor -j` para monitores — o campo `size` é **pixels do modo** (o físico é `sizeMM`) e a área lógica = `size / scale`.
+- **Overlay no Wayland**: layer-shell (`zwlr_layer_shell_v1`) + egui/`wgpu` (`ui::overlay_wayland`) — `eframe`/`winit` **não** fazem layer-shell. Margens são **locais do `wl_output`** (recria a superfície ao trocar de monitor); espera o `configure` antes de renderizar e **sempre** commita (senão o loop de frames congela).
+- **Teste sem sessão Wayland**: `kwin_wayland --virtual --socket <s>` (headless) valida protocolo/overlay; `kdotool`/atalhos/injeção exigem sessão real.
 - **Bandeja no Windows**: o Windows 11 joga ícones novos no *overflow* (seta `^`). O app grava `IsPromoted=1` em `HKCU\Control Panel\NotifyIconSettings` (só se o usuário nunca escolheu) e re-adiciona o ícone; também trata `TaskbarCreated` para re-adicioná-lo se o Explorer reiniciar.
 - **Overlay no Windows**: `with_mouse_passthrough(true)` força `WS_EX_LAYERED` e o **glow/OpenGL não apresenta** (a janela aparece vazia). Não usar no Windows; o click-through/sem-foco vem de `WS_EX_TRANSPARENT | WS_EX_NOACTIVATE` aplicado por `SetWindowLongPtr` a cada quadro (o winit reaplica estilos ao processar comandos de viewport).
 
