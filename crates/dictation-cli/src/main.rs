@@ -6,10 +6,9 @@
 //!   dictation last
 //!   dictation transcribe <arquivo.wav> [--to stdout|type]
 
-use dictation_core::{AsrEngine, AsrOptions, Config, InjectMode};
+use dictation_core::{AsrEngine, AsrOptions, Config};
 use dictation_groq::GroqEngine;
-use dictation_platform::inject::{PlatformClipboardInjector, PlatformTypeInjector, StdoutInjector};
-use dictation_platform::TextInjector;
+use dictation_platform::inject::build_injector;
 use std::io::{BufRead, BufReader, Write};
 #[cfg(not(windows))]
 use std::os::unix::net::UnixStream;
@@ -197,16 +196,6 @@ fn transcribe(cfg: &Config, args: &[String]) {
             std::process::exit(1);
         }
     };
-    let injector: Box<dyn TextInjector> = match cfg.inject {
-        InjectMode::Stdout => Box::new(StdoutInjector),
-        InjectMode::Clipboard => {
-            Box::new(PlatformClipboardInjector::new().with_trailing_space(cfg.trailing_space))
-        }
-        InjectMode::Type => Box::new(
-            PlatformTypeInjector::new()
-                .with_delay_ms(cfg.type_delay_ms)
-                .with_trailing_space(cfg.trailing_space),
-        ),
-    };
+    let injector = build_injector(cfg.inject, cfg.trailing_space, cfg.type_delay_ms);
     let _ = injector.inject(&text);
 }

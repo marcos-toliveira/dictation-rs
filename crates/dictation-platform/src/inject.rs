@@ -4,6 +4,7 @@
 //! * [`XdotoolInjector`] — X11, usando o `xdotool` (feature `x11`).
 
 use crate::{InjectError, TextInjector};
+use dictation_core::InjectMode;
 
 /// Escreve o texto em `stdout` (útil para testes e para `inject = "stdout"`).
 #[derive(Default)]
@@ -13,6 +14,44 @@ impl TextInjector for StdoutInjector {
     fn inject(&self, text: &str) -> Result<(), InjectError> {
         println!("{text}");
         Ok(())
+    }
+}
+
+/// Constrói o injetor de texto para a **sessão atual** (X11 vs Wayland no Linux) e o
+/// modo configurado.
+///
+/// Compartilhado pelo daemon e pelo CLI (`dictation transcribe`) para a seleção de
+/// backend ser **única** — antes o CLI construía sempre o injetor X11 e a injeção
+/// direta no Wayland ficava quebrada.
+pub fn build_injector(
+    mode: InjectMode,
+    trailing_space: bool,
+    type_delay_ms: u32,
+) -> Box<dyn TextInjector> {
+    match mode {
+        InjectMode::Stdout => Box::new(StdoutInjector),
+        InjectMode::Clipboard => {
+            #[cfg(all(target_os = "linux", feature = "wayland"))]
+            if crate::session::is_wayland() {
+                return Box::new(WlClipboardInjector::new().with_trailing_space(trailing_space));
+            }
+            Box::new(PlatformClipboardInjector::new().with_trailing_space(trailing_space))
+        }
+        InjectMode::Type => {
+            #[cfg(all(target_os = "linux", feature = "wayland"))]
+            if crate::session::is_wayland() {
+                return Box::new(
+                    YdotoolTypeInjector::new()
+                        .with_delay_ms(type_delay_ms)
+                        .with_trailing_space(trailing_space),
+                );
+            }
+            Box::new(
+                PlatformTypeInjector::new()
+                    .with_delay_ms(type_delay_ms)
+                    .with_trailing_space(trailing_space),
+            )
+        }
     }
 }
 
