@@ -251,19 +251,23 @@ impl WaylandOverlay {
 
         let size = crate::overlay::overlay_size(recording, &preview);
         let (w, h) = (size.x as u32, size.y as u32);
+        let mut recompute = false;
         if (w, h) != self.last_size {
             self.last_size = (w, h);
             self.layer.set_size(w, h);
+            recompute = true; // a âncora depende do tamanho
         }
 
-        // Reancora na janela em foco (com guarda anti-loop) e escolhe o output.
+        // Reancora na janela em foco — e SÓ aqui consultamos `kdotool`/`kscreen-doctor`
+        // (não a cada frame: senão spawnaria ~60 processos/s).
         if visible && now.duration_since(self.last_reposition) >= REPOSITION {
             self.last_reposition = now;
             if let Some(win) = self.geom.active_window_rect() {
                 self.last_win = Some(win);
             }
+            recompute = true;
         }
-        if visible {
+        if visible && recompute {
             if let Some(win) = self.last_win {
                 let (cx, cy) = win.center();
                 let monitor = self.geom.monitor_rect_for(cx, cy);
@@ -297,13 +301,25 @@ impl WaylandOverlay {
         if self.gfx.is_none() {
             self.gfx = Some(Gfx::new(self.display_ptr, self.surface_ptr, self.last_size));
         }
+        let mut recreate = false;
         if let Some(gfx) = self.gfx.as_mut() {
             if (gfx.width, gfx.height) != self.last_size {
                 gfx.resize(self.last_size);
             }
-            gfx.render(visible, recording, &preview, pulse);
+            recreate = gfx.render(visible, recording, &preview, pulse) == RenderOutcome::Recreate;
+        }
+        if recreate {
+            self.gfx = None; // recria a superfície wgpu no próximo tick
         }
     }
+}
+
+/// Resultado de um frame: `Recreate` quando a superfície foi perdida e precisa ser
+/// recriada pelo chamador.
+#[derive(PartialEq, Eq)]
+enum RenderOutcome {
+    Ok,
+    Recreate,
 }
 
 struct Gfx {
@@ -413,7 +429,13 @@ impl Gfx {
         self.surface.configure(&self.device, &self.config);
     }
 
-    fn render(&mut self, visible: bool, recording: bool, preview: &str, pulse: f32) {
+    fn render(
+        &mut self,
+        visible: bool,
+        recording: bool,
+        preview: &str,
+        pulse: f32,
+    ) -> RenderOutcome {
         let raw_input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -426,7 +448,9 @@ impl Gfx {
                 crate::overlay::content(ui, recording, preview, pulse);
             }
         });
-        for (id, deltas) in &output.textures_delta.set {
+        // Retira os deltas antes de mover `output.shapes` (o `tessellate` consome shapes).
+        let mut textures_delta = std::mem::take(&mut output.textures_delta);
+        for (id, deltas) in &textures_delta.set {
             for d in deltas {
                 self.renderer
                     .update_texture(&self.device, &self.queue, *id, d);
@@ -441,7 +465,22 @@ impl Gfx {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-            _ => return,
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                // Configuração desatualizada: reconfigura e tenta no próximo frame.
+                self.surface.configure(&self.device, &self.config);
+                self.release_deltas(&mut textures_delta);
+                return RenderOutcome::Ok;
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                // Superfície perdida: o chamador recria (wgpu + layer).
+                self.release_deltas(&mut textures_delta);
+                return RenderOutcome::Recreate;
+            }
+            _ => {
+                // Timeout/Occluded/Validation: pula o frame.
+                self.release_deltas(&mut textures_delta);
+                return RenderOutcome::Ok;
+            }
         };
         let view = frame
             .texture
@@ -480,10 +519,17 @@ impl Gfx {
             .submit(cmds.into_iter().chain(std::iter::once(encoder.finish())));
         self.queue.present(frame);
 
-        for id in &output.textures_delta.free {
+        self.release_deltas(&mut textures_delta);
+        RenderOutcome::Ok
+    }
+
+    /// Libera as texturas que o egui mandou descartar e zera os deltas (evita o
+    /// `debug_assert` do epaint ao dropar `TexturesDelta` não-vazio).
+    fn release_deltas(&mut self, delta: &mut egui::TexturesDelta) {
+        for id in &delta.free {
             self.renderer.free_texture(id);
         }
-        output.textures_delta.clear();
+        delta.clear();
     }
 }
 
