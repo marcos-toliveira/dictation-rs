@@ -291,6 +291,40 @@ fn default_candidates() -> Vec<String> {
     Vec::new()
 }
 
+/// Thread leitora do pipe do ffmpeg: lê blocos de `s16le` e os entrega por canal.
+///
+/// O `read` pode bloquear; por isso fica **fora** da thread de captura (que consome
+/// com `recv_timeout`). Ao receber EOF (fonte encerrada) ou quando o receptor some, a
+/// thread termina. Extraída para permitir teste com uma fonte controlada.
+#[cfg(target_os = "linux")]
+fn spawn_reader<R: std::io::Read + Send + 'static>(
+    out: R,
+    tx: mpsc::Sender<Vec<i16>>,
+) -> std::thread::JoinHandle<()> {
+    use std::io::Read;
+    std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(out);
+        let mut buf = vec![0u8; 3200]; // 100 ms @ 16 kHz mono s16le
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break, // EOF: fonte encerrou
+                Ok(n) => {
+                    let mut block = buf[..n].to_vec();
+                    if block.len() % 2 == 1 {
+                        block.pop(); // descarta byte ímpar
+                    }
+                    let (pairs, _) = block.as_chunks::<2>();
+                    let samples: Vec<i16> = pairs.iter().map(|p| i16::from_le_bytes(*p)).collect();
+                    if tx.send(samples).is_err() {
+                        break; // receptor sumiu
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    })
+}
+
 /// Captura via `ffmpeg` (Linux: PulseAudio/PipeWire) — **robusto** onde o cpal/ALSA
 /// desta máquina falha intermitentemente (panic de buffer no backend ALSA).
 #[cfg(target_os = "linux")]
@@ -388,30 +422,7 @@ impl AudioCapture for FfmpegCapture {
         // da thread de captura; esta consome com espera limitada (`recv_timeout`).
         // Quando o ffmpeg morre/é morto, o `read` retorna EOF e a thread encerra.
         let (tx, rx) = mpsc::channel::<Vec<i16>>();
-        let reader = std::thread::spawn(move || {
-            use std::io::Read;
-            let mut reader = std::io::BufReader::new(out);
-            let mut buf = vec![0u8; 3200]; // 100 ms @ 16 kHz mono s16le
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => break, // EOF: ffmpeg encerrou
-                    Ok(n) => {
-                        let mut block = buf[..n].to_vec();
-                        if block.len() % 2 == 1 {
-                            block.pop(); // descarta byte ímpar
-                        }
-                        let (pairs, _) = block.as_chunks::<2>();
-                        let samples: Vec<i16> =
-                            pairs.iter().map(|p| i16::from_le_bytes(*p)).collect();
-                        if tx.send(samples).is_err() {
-                            break; // receptor sumiu
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-        self.reader = Some(reader);
+        self.reader = Some(spawn_reader(out, tx));
         self.rx = Some(rx);
         self.child = Some(child);
         Ok(())
@@ -496,5 +507,41 @@ mod tests {
         // Sender dropado: canal desconectado → None (fim da fonte).
         drop(tx);
         assert_eq!(cap.recv(), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ffmpeg_recv_expira_e_stop_faz_join() {
+        use std::io::Read;
+
+        // Leitor controlado que "trava" (como um ffmpeg vivo sem produzir stdout)
+        // até ser liberado; então devolve EOF.
+        struct Blocked {
+            gate: mpsc::Receiver<()>,
+        }
+        impl Read for Blocked {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                let _ = self.gate.recv();
+                Ok(0) // EOF ao liberar
+            }
+        }
+
+        let (gate_tx, gate_rx) = mpsc::channel::<()>();
+        let (tx, rx) = mpsc::channel::<Vec<i16>>();
+        let reader = spawn_reader(Blocked { gate: gate_rx }, tx);
+        let mut cap = FfmpegCapture {
+            source: None,
+            child: None,
+            rx: Some(rx),
+            reader: Some(reader),
+        };
+
+        // Leitor travado → recv expira (≤100ms) e devolve bloco vazio (o daemon
+        // recheca o `stop`), em vez de bloquear para sempre.
+        assert_eq!(cap.recv(), Some(Vec::new()));
+
+        // Libera o leitor (EOF) e confirma que `stop` faz join da thread leitora.
+        gate_tx.send(()).unwrap();
+        assert!(cap.stop().is_ok());
     }
 }
