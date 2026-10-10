@@ -621,6 +621,7 @@ dependencies = [
  "wayland-client",
  "wgpu",
  "windows 0.54.0",
+ "winit",
 ]
 
 [[package]]

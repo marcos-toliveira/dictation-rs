@@ -360,6 +360,39 @@ impl TextInjector for YdotoolTypeInjector {
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub const CTRL_V_KEYCODES: &str = "29:1 47:1 47:0 29:0";
 
+/// Ctrl+V na sintaxe do `ydotool` **0.x** (ex.: 0.1.8 do Ubuntu 24.04): nomes de teclas
+/// separados por `+`. A 0.x **não** entende `keycode:estado` (digita dígitos soltos).
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+pub const CTRL_V_NAMES: &str = "ctrl+v";
+
+/// O texto de `ydotool key --help` indica a sintaxe por **nomes** (0.x)? (função pura)
+///
+/// A 0.x documenta "key sequence ... separated by plus"; a 1.x documenta `KEYCODE:PRESSED`.
+/// Na dúvida, assume a 1.x (keycodes), que é a sintaxe do projeto.
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+pub fn help_uses_key_names(help: &str) -> bool {
+    let h = help.to_ascii_lowercase();
+    h.contains("separated by plus") && !h.contains("keycode")
+}
+
+/// Detecta (uma vez por processo) qual sintaxe de `ydotool key` o binário instalado usa.
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+fn ydotool_uses_key_names() -> bool {
+    use std::sync::OnceLock;
+    static NAMES: OnceLock<bool> = OnceLock::new();
+    *NAMES.get_or_init(|| {
+        std::process::Command::new("ydotool")
+            .args(["key", "--help"])
+            .output()
+            .map(|o| {
+                let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
+                text.push_str(&String::from_utf8_lossy(&o.stderr));
+                help_uses_key_names(&text)
+            })
+            .unwrap_or(false)
+    })
+}
+
 /// Injeta o texto **colando da área de transferência** (`wl-copy` + Ctrl+V via `ydotool`).
 ///
 /// Caminho confiável no Wayland para Unicode/acentos (o texto vai inteiro e exato).
@@ -426,17 +459,20 @@ fn wl_clipboard_paste(payload: &str, initial_delay_ms: u32) -> Result<(), Inject
     if initial_delay_ms > 0 {
         std::thread::sleep(std::time::Duration::from_millis(initial_delay_ms as u64));
     }
-    let status = std::process::Command::new("ydotool")
-        .arg("key")
+    let mut paste = std::process::Command::new("ydotool");
+    paste.arg("key");
+    if ydotool_uses_key_names() {
+        paste.arg(CTRL_V_NAMES);
+    } else {
         // Cada evento `KEYCODE:ESTADO` precisa ser um argv separado (o CLI não divide
         // espaços dentro de um argumento).
-        .args(CTRL_V_KEYCODES.split_whitespace())
-        .status()
-        .map_err(|e| {
-            InjectError::Failed(format!(
-                "ydotool: {e} — instale `ydotool` e mantenha o `ydotoold` rodando"
-            ))
-        })?;
+        paste.args(CTRL_V_KEYCODES.split_whitespace());
+    }
+    let status = paste.status().map_err(|e| {
+        InjectError::Failed(format!(
+            "ydotool: {e} — instale `ydotool` e mantenha o `ydotoold` rodando"
+        ))
+    })?;
     if !status.success() {
         return Err(InjectError::Failed(format!(
             "ydotool key saiu com {status}"
@@ -702,6 +738,21 @@ mod tests {
         let _clip_inj = WlClipboardInjector::new()
             .with_initial_delay_ms(1)
             .with_trailing_space(false);
+    }
+
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    #[test]
+    fn help_detects_ydotool_generation() {
+        // ydotool 0.1.8 (Ubuntu 24.04): nomes de teclas separados por `+`.
+        let v0 = "Usage: key [--delay <ms>] <key sequence> ...\n\
+                  Each key sequence can be any number of modifiers and keys, separated by plus (+)";
+        assert!(help_uses_key_names(v0));
+        // ydotool 1.x: `KEYCODE:PRESSED`.
+        let v1 = "Usage: ydotool key [OPTION]... [KEYCODE:PRESSED]...";
+        assert!(!help_uses_key_names(v1));
+        // Sem informação: mantém a sintaxe de keycodes do projeto.
+        assert!(!help_uses_key_names(""));
+        assert_eq!(CTRL_V_NAMES, "ctrl+v");
     }
 
     #[cfg(all(target_os = "linux", feature = "wayland"))]
