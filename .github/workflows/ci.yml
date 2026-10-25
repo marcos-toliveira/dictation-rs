@@ -11,12 +11,12 @@ env:
 jobs:
   test:
     # Decisão do dono (25/10/2026): todo CI roda nos runners locais (o GitHub não inicia runner hospedado na conta).
-    # Linux = runner local do desktop (WSL Arch, dependências instaladas no host); Windows = runner local no Windows do
-    # mesmo PC (rótulo `windows`). Repositório PÚBLICO: PR de colaborador externo só roda com aprovação do dono
+    # Linux = runner local do desktop (WSL Arch, dependências instaladas no host). Sem job Windows por ora (decisão
+    # do dono, 25/10): o build Windows é conferido na máquina do dono ao gerar release. Repositório PÚBLICO: PR de colaborador externo só roda com aprovação do dono
     # (política de Actions `all_external_contributors`).
     strategy:
       matrix:
-        os: [linux, windows]
+        os: [linux]
     runs-on: [self-hosted, "${{ matrix.os }}", x64]
     steps:
       - uses: actions/checkout@v4
