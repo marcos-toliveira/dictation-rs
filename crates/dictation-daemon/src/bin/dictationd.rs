@@ -504,12 +504,31 @@ fn main() {
     #[cfg(target_os = "linux")]
     {
         if dictation_platform::session::is_wayland() {
-            dictation_ui::overlay_wayland::run_overlay(
-                ui,
+            let ran = dictation_ui::overlay_wayland::run_overlay(
+                ui.clone(),
                 cfg.indicator_anchor.clone(),
                 cfg.preview_anchor.clone(),
             );
-            return;
+            if ran {
+                return;
+            }
+            // Compositor sem layer-shell (ex.: GNOME/Mutter): tenta o overlay em XWayland
+            // (janela não gerenciada, sem roubar foco). Sem `DISPLAY` ou se falhar, o estado
+            // de gravação fica só na bandeja. O daemon segue vivo; a saída é bandeja/CLI.
+            if std::env::var_os("DISPLAY").is_some() {
+                tracing::info!("layer-shell indisponível; overlay via XWayland");
+                if let Err(e) = dictation_ui::run_overlay_xwayland(
+                    ui,
+                    cfg.indicator_anchor.clone(),
+                    cfg.preview_anchor.clone(),
+                ) {
+                    tracing::error!(error = %e, "overlay XWayland falhou");
+                }
+            }
+            tracing::warn!("overlay indisponível nesta sessão; seguindo só com a bandeja");
+            loop {
+                std::thread::park();
+            }
         }
     }
     let _ = dictation_ui::run_overlay(ui, cfg.indicator_anchor.clone(), cfg.preview_anchor.clone());

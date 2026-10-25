@@ -57,7 +57,40 @@ pub fn run_overlay(
     indicator_anchor: String,
     preview_anchor: String,
 ) -> eframe::Result<()> {
-    let options = overlay_options([74.0, 38.0]);
+    run_overlay_with(state, indicator_anchor, preview_anchor, false)
+}
+
+/// Overlay forçado em **X11/XWayland**, mesmo numa sessão Wayland.
+///
+/// Para compositores sem `wlr-layer-shell` (GNOME/Mutter): a janela `override_redirect`
+/// não é gerenciada pelo compositor, então **não rouba foco** (medido no GNOME 46). O
+/// `WAYLAND_DISPLAY` do processo fica intacto (`wl-copy`/`ydotool` dependem dele).
+/// Exige `DISPLAY` (XWayland). Deve ser chamado na **thread principal**.
+#[cfg(target_os = "linux")]
+pub fn run_overlay_xwayland(
+    state: state::SharedUi,
+    indicator_anchor: String,
+    preview_anchor: String,
+) -> eframe::Result<()> {
+    run_overlay_with(state, indicator_anchor, preview_anchor, true)
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+fn run_overlay_with(
+    state: state::SharedUi,
+    indicator_anchor: String,
+    preview_anchor: String,
+    force_x11: bool,
+) -> eframe::Result<()> {
+    #[allow(unused_mut)]
+    let mut options = overlay_options([74.0, 38.0]);
+    #[cfg(target_os = "linux")]
+    if force_x11 {
+        options.event_loop_builder = Some(Box::new(|builder| {
+            use winit::platform::x11::EventLoopBuilderExtX11;
+            builder.with_x11();
+        }));
+    }
     eframe::run_native(
         "dictation-rec",
         options,

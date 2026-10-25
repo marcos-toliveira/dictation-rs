@@ -46,12 +46,16 @@ use crate::state::SharedUi;
 const REPOSITION: Duration = Duration::from_millis(500);
 
 /// Roda o overlay Wayland. **Bloqueia** (chamar na thread principal).
-pub fn run_overlay(state: SharedUi, indicator_anchor: String, preview_anchor: String) {
+///
+/// Devolve `false` quando o overlay **não pôde subir** ou morreu (compositor sem
+/// `wlr-layer-shell`, como o Mutter/GNOME): o chamador segue sem overlay (bandeja/CLI).
+/// Devolve `true` quando o laço terminou normalmente.
+pub fn run_overlay(state: SharedUi, indicator_anchor: String, preview_anchor: String) -> bool {
     let conn = match Connection::connect_to_env() {
         Ok(c) => c,
         Err(e) => {
             tracing::error!(error = %e, "overlay Wayland: falha ao conectar no compositor");
-            return;
+            return false;
         }
     };
     let display_ptr = conn.display().id().as_ptr() as *mut c_void;
@@ -59,7 +63,7 @@ pub fn run_overlay(state: SharedUi, indicator_anchor: String, preview_anchor: St
         Ok(v) => v,
         Err(e) => {
             tracing::error!(error = %e, "overlay Wayland: registry");
-            return;
+            return false;
         }
     };
     let qh = event_queue.handle();
@@ -68,21 +72,21 @@ pub fn run_overlay(state: SharedUi, indicator_anchor: String, preview_anchor: St
         Ok(c) => c,
         Err(e) => {
             tracing::error!(error = %e, "overlay Wayland: wl_compositor indisponível");
-            return;
+            return false;
         }
     };
     let layer_shell = match LayerShell::bind(&globals, &qh) {
         Ok(l) => l,
         Err(e) => {
             tracing::error!(error = %e, "overlay Wayland: wlr-layer-shell indisponível");
-            return;
+            return false;
         }
     };
     let shm = match Shm::bind(&globals, &qh) {
         Ok(s) => s,
         Err(e) => {
             tracing::error!(error = %e, "overlay Wayland: wl_shm indisponível");
-            return;
+            return false;
         }
     };
 
@@ -126,9 +130,10 @@ pub fn run_overlay(state: SharedUi, indicator_anchor: String, preview_anchor: St
     while !app.exit {
         if let Err(e) = event_queue.blocking_dispatch(&mut app) {
             tracing::error!(error = %e, "overlay Wayland: dispatch");
-            break;
+            return false;
         }
     }
+    true
 }
 
 /// Cria uma `wl_surface` + `zwlr_layer_surface_v1` (camada Overlay, ancorada em
