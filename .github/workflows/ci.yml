@@ -10,17 +10,21 @@ env:
 
 jobs:
   test:
+    # Decisão do dono (25/10/2026): todo CI roda nos runners locais (o GitHub não inicia runner hospedado na conta).
+    # Linux = runner local do desktop (WSL Arch, dependências instaladas no host). Sem job Windows por ora (decisão
+    # do dono, 25/10): o build Windows é conferido na máquina do dono ao gerar release. Repositório PÚBLICO: PR de colaborador externo só roda com aprovação do dono
+    # (política de Actions `all_external_contributors`).
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        os: [linux]
+    runs-on: [self-hosted, "${{ matrix.os }}", x64]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - name: System deps (Linux audio + tray + wayland)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && runner.environment == 'github-hosted'
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libgtk-3-dev libwayland-dev libxkbcommon-dev pkg-config
