@@ -19,6 +19,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: target do Cargo persistente (fora do checkout; nunca em PR de fork)
+        # O runner é efêmero e o `target/` mora no checkout, então todo job recompilava tudo
+        # (medido: clippy 60 s + clippy wayland 26 s + test 124 s + build release 173 s). O HOME
+        # persiste: usamos um target fora do checkout. Repositório PÚBLICO: PR de fork NUNCA
+        # compartilha cache gravável com a main (envenenamento) — fica com o target limpo do checkout.
+        if: github.event.pull_request.head.repo.fork != true
+        run: |
+          d="$HOME/.cache/ci-cargo-target/dictation-rs"
+          mkdir -p "$d"
+          echo "CARGO_TARGET_DIR=$d" >> "$GITHUB_ENV"
       - name: System deps (Linux audio + tray + wayland)
         if: runner.os == 'Linux'
         run: |
